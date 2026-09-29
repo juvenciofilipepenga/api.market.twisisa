@@ -23,7 +23,7 @@ const config: runtime.GetPrismaClientConfig = {
       "value": "prisma-client"
     },
     "output": {
-      "value": "/data/data/com.termux/files/home/twisisa_market_api/src/generated/prisma",
+      "value": "/data/data/com.termux/files/home/downloads/api.market/src/generated/prisma",
       "fromEnvVar": null
     },
     "config": {
@@ -37,7 +37,7 @@ const config: runtime.GetPrismaClientConfig = {
       }
     ],
     "previewFeatures": [],
-    "sourceFilePath": "/data/data/com.termux/files/home/twisisa_market_api/prisma/schema.prisma",
+    "sourceFilePath": "/data/data/com.termux/files/home/downloads/api.market/prisma/schema.prisma",
     "isCustomOutput": true
   },
   "relativePath": "../../../prisma",
