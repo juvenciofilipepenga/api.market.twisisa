@@ -1,0 +1,346 @@
+generator client {
+  provider   = "prisma-client"
+  output     = "../src/generated/prisma"
+  engineType = "client"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+
+enum UserStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  BLOCKED
+}
+
+enum RoleName {
+  CUSTOMER
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAYMENT_REVIEW
+  PAID
+  PROCESSING
+  READY_FOR_SHIPMENT
+  SHIPPED
+  OUT_FOR_DELIVERY
+  DELIVERED
+  CANCELLATION_REQUESTED
+  CANCELLED
+  REFUND_PENDING
+  REFUNDED
+}
+
+enum PaymentStatus {
+  INITIATED
+  AUTHENTICATING
+  SUCCESS
+  FAILED
+  TIMEOUT
+  PENDING_CONFIRMATION
+  CANCELLED
+  REFUNDED
+  PAYMENT_PENDING
+  PROOF_SUBMITTED
+  UNDER_REVIEW
+  PAYMENT_CONFIRMED
+  PAYMENT_REJECTED
+  REFUND_PENDING
+  REFUNDED_LEGACY
+}
+
+enum NotificationType {
+  ORDER
+  PAYMENT
+  DELIVERY
+  SECURITY
+  MARKETING
+  SYSTEM
+  REFERRAL
+  SUPPORT
+}
+
+enum ConversationStatus {
+  BOT
+  ESCALATED
+  CLOSED
+}
+
+enum ChatSenderType {
+  CUSTOMER
+  BOT
+  ADMIN
+}
+
+model User {
+  id String @id @default(cuid())
+  email String @unique
+  phone String? @unique
+  passwordHash String
+  name String
+  status UserStatus @default(ACTIVE)
+  referralCode String @unique @default(cuid())
+  referredById String?
+  completedReferrals Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  roles UserRole[]
+  orders Order[]
+  auditLogs AuditLog[] @relation("AuditActor")
+  sessions Session[]
+  addresses Address[]
+  invoices Invoice[]
+  notifications Notification[]
+  conversations Conversation[]
+  referredBy User? @relation("UserReferrals", fields: [referredById], references: [id], onDelete: SetNull)
+  referrals User[] @relation("UserReferrals")
+  @@index([referredById])
+}
+
+model Role {
+  id String @id @default(cuid())
+  name RoleName @unique
+  users UserRole[]
+}
+
+model UserRole {
+  userId String
+  roleId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  @@id([userId, roleId])
+}
+
+model Session {
+  id String @id @default(cuid())
+  userId String
+  tokenHash String @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+}
+
+model Category {
+  id String @id @default(cuid())
+  name String @unique
+  slug String @unique
+  products Product[]
+  createdAt DateTime @default(now())
+}
+
+model Product {
+  id String @id @default(cuid())
+  name String
+  slug String @unique
+  description String?
+  priceMzn Decimal @db.Decimal(12, 2)
+  stock Int @default(0)
+  active Boolean @default(true)
+  categoryId String?
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  images ProductImage[]
+  orderItems OrderItem[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([categoryId])
+  @@index([active])
+}
+
+model ProductImage {
+  id String @id @default(cuid())
+  productId String
+  url String
+  publicId String?
+  altText String?
+  sortOrder Int @default(0)
+  isPrimary Boolean @default(false)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  @@index([productId, sortOrder])
+}
+
+model Order {
+  id String @id @default(cuid())
+  orderNumber String @unique
+  userId String
+  status OrderStatus @default(PENDING_PAYMENT)
+  subtotalMzn Decimal @db.Decimal(12, 2)
+  shippingMzn Decimal @db.Decimal(12, 2)
+  discountMzn Decimal @db.Decimal(12, 2)
+  totalMzn Decimal @db.Decimal(12, 2)
+  cancellationReason String?
+  cancelledAt DateTime?
+  cancelledById String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id])
+  items OrderItem[]
+  payments Payment[]
+  statusHistory OrderStatusHistory[]
+  invoice Invoice?
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model OrderItem {
+  id String @id @default(cuid())
+  orderId String
+  productId String
+  productName String
+  unitPriceMzn Decimal @db.Decimal(12, 2)
+  quantity Int
+  subtotalMzn Decimal @db.Decimal(12, 2)
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+  @@index([orderId])
+}
+
+model OrderStatusHistory {
+  id String @id @default(cuid())
+  orderId String
+  from OrderStatus?
+  to OrderStatus
+  reason String?
+  actorId String?
+  createdAt DateTime @default(now())
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  @@index([orderId, createdAt])
+}
+
+model Payment {
+  id String @id @default(cuid())
+  orderId String
+  provider String
+  status PaymentStatus @default(INITIATED)
+  amountMzn Decimal @db.Decimal(12, 2)
+  paymentNumber String?
+  reference String @unique
+  transactionCode String?
+  proofUrl String?
+  method String?
+  providerPaymentId String?
+  failureCode String?
+  failureMessage String?
+  authenticatedAt DateTime?
+  confirmedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  @@index([orderId])
+  @@index([status])
+  @@index([providerPaymentId])
+}
+
+model Invoice {
+  id String @id @default(cuid())
+  invoiceNumber String @unique
+  orderId String @unique
+  userId String
+  customerName String
+  customerEmail String
+  customerPhone String?
+  subtotalMzn Decimal @db.Decimal(12, 2)
+  shippingMzn Decimal @db.Decimal(12, 2)
+  discountMzn Decimal @db.Decimal(12, 2)
+  totalMzn Decimal @db.Decimal(12, 2)
+  paymentMethod String?
+  paymentReference String?
+  pdfUrl String?
+  issuedAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  order Order @relation(fields: [orderId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+  @@index([userId])
+}
+
+model Address {
+  id String @id @default(cuid())
+  userId String
+  label String
+  address1 String
+  city String
+  province String
+  postalCode String?
+  phone String?
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId])
+}
+
+model Notification {
+  id String @id @default(cuid())
+  userId String?
+  type NotificationType
+  title String
+  message String
+  data Json?
+  readAt DateTime?
+  createdAt DateTime @default(now())
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, createdAt])
+  @@index([readAt])
+}
+
+model Conversation {
+  id String @id @default(cuid())
+  userId String
+  status ConversationStatus @default(BOT)
+  assignedAdminId String?
+  lastMessageAt DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+  @@index([userId])
+  @@index([status, lastMessageAt])
+}
+
+model ChatMessage {
+  id String @id @default(cuid())
+  conversationId String
+  senderType ChatSenderType
+  senderId String?
+  content String?
+  createdAt DateTime @default(now())
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  attachments ChatAttachment[]
+  @@index([conversationId, createdAt])
+}
+
+model ChatAttachment {
+  id String @id @default(cuid())
+  messageId String
+  url String
+  publicId String?
+  mimeType String
+  sizeBytes Int
+  createdAt DateTime @default(now())
+  message ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  @@index([messageId])
+}
+
+model AuditLog {
+  id String @id @default(cuid())
+  actorId String?
+  action String
+  entity String
+  entityId String?
+  ip String?
+  userAgent String?
+  metadata Json?
+  createdAt DateTime @default(now())
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  @@index([actorId])
+  @@index([entity, entityId])
+  @@index([createdAt])
+}
