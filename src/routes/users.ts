@@ -30,7 +30,7 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
         { phone: { contains: q.search, mode: "insensitive" as const } }
       ] } : {})
     };
-    const [data, total] = await prisma.$transaction([
+    const [data, total] = await Promise.all([
       prisma.user.findMany({ where, skip: (q.page - 1) * q.limit, take: q.limit, orderBy: { createdAt: "desc" }, select: { id: true, name: true, email: true, phone: true, status: true, createdAt: true, roles: { select: { role: { select: { name: true } } } } } }),
       prisma.user.count({ where })
     ]);

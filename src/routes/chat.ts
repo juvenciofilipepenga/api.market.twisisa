@@ -151,7 +151,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.get("/admin/chat/conversations", { preHandler: [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)] }, async (request) => {
     const q = z.object({ status: z.nativeEnum(ConversationStatus).optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20) }).parse(request.query);
     const where = q.status ? { status: q.status } : {};
-    const [data, total] = await prisma.$transaction([
+    const [data, total] = await Promise.all([
       prisma.conversation.findMany({ where, skip: (q.page - 1) * q.limit, take: q.limit, orderBy: { lastMessageAt: "desc" }, include: { user: { select: { id: true, name: true, email: true, phone: true } } } }),
       prisma.conversation.count({ where })
     ]);

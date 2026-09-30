@@ -6,7 +6,7 @@ import { requireAuth } from "../middleware/auth.js";
 export async function notificationRoutes(app: FastifyInstance): Promise<void> {
   app.get("/notifications", { preHandler: requireAuth }, async (request) => {
     const q = z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(30) }).parse(request.query);
-    const [data, total] = await prisma.$transaction([
+    const [data, total] = await Promise.all([
       prisma.notification.findMany({ where: { userId: request.auth!.userId }, orderBy: { createdAt: "desc" }, skip: (q.page - 1) * q.limit, take: q.limit }),
       prisma.notification.count({ where: { userId: request.auth!.userId } })
     ]);

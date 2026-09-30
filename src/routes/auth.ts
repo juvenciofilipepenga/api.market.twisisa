@@ -5,12 +5,15 @@ import { prisma } from "../lib/prisma.js";
 import { hashPassword, signAccessToken, verifyPassword } from "../lib/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
+import { findActiveInviterByCode, normalizeReferralCode, notifyReferralSignup } from "../services/referrals.js";
 
 const registerSchema = z.object({
   name: z.string().trim().min(2).max(120),
   email: z.string().trim().toLowerCase().email(),
   phone: z.string().trim().min(7).max(30).optional(),
-  password: z.string().min(10).max(128)
+  password: z.string().min(10).max(128),
+  // Código de convite (opcional). Se for inválido o registo continua normalmente, só não fica associado.
+  referralCode: z.string().trim().max(64).optional()
 });
 const loginSchema = z.object({ email: z.string().trim().toLowerCase().email(), password: z.string().min(1) });
 
@@ -21,19 +24,25 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (await prisma.user.findUnique({ where: { email: parsed.data.email } })) return reply.code(409).send({ error: "EMAIL_ALREADY_EXISTS" });
     const role = await prisma.role.findUnique({ where: { name: RoleName.CUSTOMER } });
     if (!role) return reply.code(500).send({ error: "ROLE_NOT_INITIALIZED" });
+    const referralCode = normalizeReferralCode(parsed.data.referralCode);
+    const inviter = referralCode ? await findActiveInviterByCode(referralCode) : null;
     const user = await prisma.user.create({
       data: {
         name: parsed.data.name,
         email: parsed.data.email,
         phone: parsed.data.phone,
         passwordHash: await hashPassword(parsed.data.password),
+        referredById: inviter?.id,
         roles: { create: { roleId: role.id } }
       },
       include: { roles: { include: { role: true } } }
     });
     const roles = user.roles.map((item) => item.role.name);
-    await audit({ actorId: user.id, action: "USER_REGISTERED", entity: "User", entityId: user.id, ip: request.ip, userAgent: request.headers["user-agent"] });
-    return reply.code(201).send({ user: { id: user.id, name: user.name, email: user.email, roles }, accessToken: signAccessToken(user.id, roles) });
+    await audit({ actorId: user.id, action: "USER_REGISTERED", entity: "User", entityId: user.id, ip: request.ip, userAgent: request.headers["user-agent"], metadata: inviter ? { referredById: inviter.id } : undefined });
+    if (inviter) {
+      try { await notifyReferralSignup(inviter.id, user.name); } catch (error) { request.log.error(error, "referral signup notification failed"); }
+    }
+    return reply.code(201).send({ user: { id: user.id, name: user.name, email: user.email, roles }, accessToken: signAccessToken(user.id, roles), referralApplied: Boolean(inviter) });
   });
 
   app.post("/auth/login", async (request, reply) => {

@@ -26,7 +26,7 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
   app.get("/products", async (request) => {
     const q = z.object({ search: z.string().trim().max(100).optional(), categoryId: z.string().optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20) }).parse(request.query);
     const where = { active: true, ...(q.categoryId ? { categoryId: q.categoryId } : {}), ...(q.search ? { OR: [{ name: { contains: q.search, mode: "insensitive" as const } }, { description: { contains: q.search, mode: "insensitive" as const } }] } : {}) };
-    const [data, total] = await prisma.$transaction([
+    const [data, total] = await Promise.all([
       prisma.product.findMany({ where, skip: (q.page - 1) * q.limit, take: q.limit, orderBy: { createdAt: "desc" }, include: { category: true, images: { orderBy: { sortOrder: "asc" } } } }),
       prisma.product.count({ where })
     ]);
@@ -63,7 +63,7 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
   app.get("/admin/products", { preHandler: adminOnly }, async (request) => {
     const q = z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20), includeInactive: z.coerce.boolean().default(true) }).parse(request.query);
     const where = q.includeInactive ? {} : { active: true };
-    const [data, total] = await prisma.$transaction([
+    const [data, total] = await Promise.all([
       prisma.product.findMany({ where, skip: (q.page - 1) * q.limit, take: q.limit, orderBy: { createdAt: "desc" }, include: { category: true, images: { orderBy: { sortOrder: "asc" } } } }),
       prisma.product.count({ where })
     ]);

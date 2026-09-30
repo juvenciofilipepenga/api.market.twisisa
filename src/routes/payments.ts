@@ -10,6 +10,7 @@ import { audit } from "../services/audit.js";
 import { ensureInvoice } from "../services/invoice.js";
 import { notifyAdmins, notifyUser } from "../services/notifications.js";
 import { getPaymentProvider } from "../services/payment.js";
+import { notifyReferralCompletedIfFirst } from "../services/referrals.js";
 
 // Rede moçambicana pelo prefixo do número (sem indicativo ou com +258): M-Pesa 84/85, e-Mola 86/87.
 const mpesaPhone = /^(258)?8[45]\d{7}$/;
@@ -142,6 +143,7 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
           await ensureInvoice(current.orderId);
           await notifyUser({ userId: current.order.userId, type: "PAYMENT", title: "Pagamento confirmado", message: "O seu pagamento foi confirmado com sucesso.", data: { paymentId: current.id, orderId: current.orderId } });
           await notifyAdmins({ type: "PAYMENT", title: "Venda paga", message: `A encomenda ${current.order.orderNumber} foi paga.`, data: { paymentId: current.id, orderId: current.orderId } });
+          await notifyReferralCompletedIfFirst(current.order.userId, current.orderId).catch((error) => request.log.error(error, "referral completion notification failed"));
         } else {
           await notifyAdmins({ type: "PAYMENT", title: "Pagamento recebido para encomenda não pagável", message: `Pagamento ${current.reference} confirmado, mas a encomenda ${current.order.orderNumber} está em ${current.order.status}. Verificar reembolso.`, data: { paymentId: current.id, orderId: current.orderId } });
         }
@@ -206,6 +208,7 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
       try {
         if (body.data.approved) await ensureInvoice(result.updatedPayment.orderId);
         await notifyUser({ userId: result.order.userId, type: "PAYMENT", title: body.data.approved ? "Pagamento confirmado" : "Comprovativo rejeitado", message: body.data.approved ? "O seu comprovativo foi aprovado e o pagamento confirmado." : (body.data.note ?? "O seu comprovativo foi rejeitado. Por favor, submeta um novo."), data: { paymentId: result.updatedPayment.id } });
+        if (body.data.approved) await notifyReferralCompletedIfFirst(result.order.userId, result.updatedPayment.orderId).catch((error) => request.log.error(error, "referral completion notification failed"));
         await audit({ actorId: request.auth!.userId, action: body.data.approved ? "PAYMENT_APPROVED" : "PAYMENT_REJECTED", entity: "Payment", entityId: result.updatedPayment.id, metadata: { note: body.data.note } });
       } catch (error) {
         request.log.error(error, "payment review side effects failed");

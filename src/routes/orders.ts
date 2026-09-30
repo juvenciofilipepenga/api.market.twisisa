@@ -168,7 +168,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
     if (!isAdmin(request.auth!.roles)) return reply.code(403).send({ error: "FORBIDDEN" });
     const q = z.object({ status: z.nativeEnum(OrderStatus).optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20) }).parse(request.query);
     const where = q.status ? { status: q.status } : {};
-    const [data, total] = await prisma.$transaction([
+    const [data, total] = await Promise.all([
       prisma.order.findMany({ where, skip: (q.page - 1) * q.limit, take: q.limit, orderBy: { createdAt: "desc" }, include: { user: { select: { id: true, name: true, email: true } }, items: true, payments: true, invoice: true } }),
       prisma.order.count({ where })
     ]);
