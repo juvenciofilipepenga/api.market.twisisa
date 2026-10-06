@@ -72,6 +72,11 @@ export type Category = Prisma.CategoryModel
  */
 export type Product = Prisma.ProductModel
 /**
+ * Model ProductVariant
+ * 
+ */
+export type ProductVariant = Prisma.ProductVariantModel
+/**
  * Model ProductImage
  * 
  */
@@ -131,3 +136,8 @@ export type ChatAttachment = Prisma.ChatAttachmentModel
  * 
  */
 export type AuditLog = Prisma.AuditLogModel
+/**
+ * Model Review
+ * 
+ */
+export type Review = Prisma.ReviewModel

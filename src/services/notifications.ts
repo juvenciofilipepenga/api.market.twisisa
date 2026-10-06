@@ -1,6 +1,6 @@
 import { NotificationType, RoleName } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
-import { emitRealtime, emitToAdmins, emitToUser } from "./realtime.js";
+import { emitToAdmins, emitToUser } from "./realtime.js";
 
 export async function notifyUser(input: {
   userId: string;
@@ -19,7 +19,8 @@ export async function notifyUser(input: {
     }
   });
   emitToUser(input.userId, "notification.created", notification);
-  emitRealtime("dashboard.activity", { type: input.type, notificationId: notification.id, createdAt: notification.createdAt });
+  // Só os admins veem a atividade global; emitir para todos expunha a clientes o tipo/ids das notificações de outros.
+  emitToAdmins("dashboard.activity", { type: input.type, notificationId: notification.id, createdAt: notification.createdAt });
   return notification;
 }
 

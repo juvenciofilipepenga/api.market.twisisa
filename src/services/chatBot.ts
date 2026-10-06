@@ -75,8 +75,11 @@ async function askGroq(history: Array<{ role: "user" | "assistant"; content: str
     "Se a pergunta exigir acesso a dados que não tens, envolver uma reclamação, um reembolso específico, ou for sobre qualquer outro assunto,",
     'responde APENAS com a palavra "ESCALATE" seguida de dois pontos e um resumo curto do pedido do cliente, sem mais nada.'
   ].join(" ");
-  const response = await fetch(new URL("/chat/completions", env.GROQ_API_BASE_URL).toString(), {
+  let response: Response;
+  try {
+    response = await fetch(new URL("/chat/completions", env.GROQ_API_BASE_URL).toString(), {
     method: "POST",
+    signal: AbortSignal.timeout(10_000),
     headers: { Authorization: `Bearer ${env.GROQ_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       model: env.GROQ_MODEL,
@@ -85,6 +88,10 @@ async function askGroq(history: Array<{ role: "user" | "assistant"; content: str
       messages: [{ role: "system", content: systemPrompt }, ...history]
     })
   });
+  } catch {
+    // Timeout ou falha de rede: não deixa o cliente pendurado, passa a um atendente.
+    return { reply: "Estou com dificuldade em responder agora. Vou encaminhar para um atendente.", escalate: true };
+  }
   if (!response.ok) {
     return { reply: "Estou com dificuldade em responder agora. Vou encaminhar para um atendente.", escalate: true };
   }

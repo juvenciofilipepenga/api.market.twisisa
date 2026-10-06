@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { ChatSenderType, ConversationStatus, RoleName } from "../generated/prisma/client.js";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
+import { detectMime, isFileTooLarge } from "../lib/files.js";
 import { isAdmin, requireAuth, requireRole } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
 import { uploadChatAttachment } from "../services/cloudinary.js";
@@ -12,6 +13,16 @@ import { notifyAdmins, notifyUser } from "../services/notifications.js";
 const ALLOWED_ATTACHMENT_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "application/pdf"]);
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const HISTORY_LIMIT = 12;
+const MAX_CONTENT_CHARS = 4000;
+
+// Erros de upload conhecidos; qualquer outro (ex.: mensagem interna do Cloudinary) vira um código genérico.
+function uploadFailure(error: unknown): { status: number; code: string } {
+  const message = error instanceof Error ? error.message : "";
+  if (message === "UNSUPPORTED_FILE_TYPE") return { status: 415, code: message };
+  if (message === "FILE_TOO_LARGE") return { status: 413, code: message };
+  if (message === "CLOUDINARY_NOT_CONFIGURED") return { status: 503, code: message };
+  return { status: 502, code: "ATTACHMENT_UPLOAD_FAILED" };
+}
 
 type PendingAttachment = { url: string; publicId?: string; mimeType: string; sizeBytes: number };
 
@@ -24,20 +35,29 @@ async function collectMessageParts(request: FastifyRequest): Promise<{ content: 
   const attachments: PendingAttachment[] = [];
   for await (const part of request.parts()) {
     if (part.type === "field" && part.fieldname === "content" && typeof part.value === "string") {
-      content = part.value.trim();
+      content = part.value.trim().slice(0, MAX_CONTENT_CHARS);
     } else if (part.type === "file") {
       if (!ALLOWED_ATTACHMENT_TYPES.has(part.mimetype)) {
         part.file.resume();
         throw new Error("UNSUPPORTED_FILE_TYPE");
       }
-      const buffer = await part.toBuffer();
+      let buffer: Buffer;
+      try {
+        buffer = await part.toBuffer();
+      } catch (error) {
+        if (isFileTooLarge(error)) throw new Error("FILE_TOO_LARGE");
+        throw error;
+      }
       if (buffer.length === 0) continue;
       if (buffer.length > MAX_ATTACHMENT_BYTES) throw new Error("FILE_TOO_LARGE");
-      const result = await uploadChatAttachment(buffer, part.mimetype);
+      // O tipo vem do conteúdo (o mimetype declarado pelo cliente não é de confiança).
+      const detected = detectMime(buffer);
+      if (!detected || !ALLOWED_ATTACHMENT_TYPES.has(detected)) throw new Error("UNSUPPORTED_FILE_TYPE");
+      const result = await uploadChatAttachment(buffer, detected);
       attachments.push({
         url: String(result.secure_url ?? result.url),
         publicId: typeof result.public_id === "string" ? result.public_id : undefined,
-        mimeType: part.mimetype,
+        mimeType: detected,
         sizeBytes: buffer.length
       });
     }
@@ -93,7 +113,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Cliente envia mensagem (texto e/ou anexos). O bot responde de imediato, salvo se já estiver escalado.
-  app.post("/chat/conversations/:id/messages", { preHandler: requireAuth }, async (request, reply) => {
+  app.post("/chat/conversations/:id/messages", { preHandler: requireAuth, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } }, async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const conversation = await prisma.conversation.findUnique({ where: { id: params.data.id } });
@@ -105,8 +125,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     try {
       parts = await collectMessageParts(request);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "ATTACHMENT_UPLOAD_FAILED";
-      return reply.code(message === "UNSUPPORTED_FILE_TYPE" ? 415 : message === "FILE_TOO_LARGE" ? 413 : 502).send({ error: message });
+      request.log.warn(error, "chat attachment rejected");
+      const failure = uploadFailure(error);
+      return reply.code(failure.status).send({ error: failure.code });
     }
     if (!parts.content && parts.attachments.length === 0) return reply.code(400).send({ error: "MESSAGE_REQUIRED" });
 
@@ -135,9 +156,10 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     const history = await loadHistory(conversation.id);
     const { reply: botReply, escalate } = await handleCustomerMessage({ userId: request.auth!.userId, text: parts.content, history });
     const botMessage = await prisma.chatMessage.create({ data: { conversationId: conversation.id, senderType: ChatSenderType.BOT, content: botReply } });
-    await prisma.conversation.update({
-      where: { id: conversation.id },
-      data: { lastMessageAt: new Date(), status: escalate ? ConversationStatus.ESCALATED : ConversationStatus.BOT }
+    // Condicional a BOT: se um admin respondeu entretanto (ESCALATED), a resposta do bot não repõe a conversa em BOT.
+    await prisma.conversation.updateMany({
+      where: { id: conversation.id, status: ConversationStatus.BOT },
+      data: { lastMessageAt: new Date(), ...(escalate ? { status: ConversationStatus.ESCALATED } : {}) }
     });
     emitChatEvent(conversation.userId, "chat.message", { conversationId: conversation.id, message: botMessage });
     if (escalate) {
@@ -163,13 +185,16 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     if (!params.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const conversation = await prisma.conversation.findUnique({ where: { id: params.data.id } });
     if (!conversation) return reply.code(404).send({ error: "CONVERSATION_NOT_FOUND" });
+    // Antes a resposta de um admin reabria em silêncio uma conversa fechada (status passava a ESCALATED).
+    if (conversation.status === ConversationStatus.CLOSED) return reply.code(409).send({ error: "CONVERSATION_CLOSED" });
 
     let parts: Awaited<ReturnType<typeof collectMessageParts>>;
     try {
       parts = await collectMessageParts(request);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "ATTACHMENT_UPLOAD_FAILED";
-      return reply.code(message === "UNSUPPORTED_FILE_TYPE" ? 415 : message === "FILE_TOO_LARGE" ? 413 : 502).send({ error: message });
+      request.log.warn(error, "chat attachment rejected");
+      const failure = uploadFailure(error);
+      return reply.code(failure.status).send({ error: failure.code });
     }
     if (!parts.content && parts.attachments.length === 0) return reply.code(400).send({ error: "MESSAGE_REQUIRED" });
 

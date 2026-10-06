@@ -1,13 +1,13 @@
 import { Server as SocketIOServer } from "socket.io";
 import { RoleName } from "./generated/prisma/client.js";
 import { buildApp } from "./app.js";
-import { env } from "./config/env.js";
+import { corsOrigins, env } from "./config/env.js";
 import { verifyAccessToken } from "./lib/auth.js";
 import { isAdmin } from "./middleware/auth.js";
 import { setRealtimeServer } from "./services/realtime.js";
 
 const app = buildApp();
-const io = new SocketIOServer(app.server, { cors: { origin: env.CORS_ORIGIN, credentials: true } });
+const io = new SocketIOServer(app.server, { cors: { origin: corsOrigins, credentials: true } });
 setRealtimeServer(io);
 
 io.use((socket, next) => {

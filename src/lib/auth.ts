@@ -7,6 +7,10 @@ export function hashPassword(password: string): Promise<string> {
   return bcrypt.hash(password, 12);
 }
 
+// Hash fictício: o login compara sempre uma password, mesmo quando o email não existe, para que o tempo
+// de resposta não revele que contas existem.
+export const DUMMY_PASSWORD_HASH = bcrypt.hashSync("twisisa-dummy-password", 12);
+
 export function verifyPassword(password: string, hash: string): Promise<boolean> {
   return bcrypt.compare(password, hash);
 }

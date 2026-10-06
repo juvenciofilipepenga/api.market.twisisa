@@ -20,4 +20,18 @@ export async function notificationRoutes(app: FastifyInstance): Promise<void> {
     if (!notification) return reply.code(404).send({ error: "NOTIFICATION_NOT_FOUND" });
     return prisma.notification.update({ where: { id: notification.id }, data: { readAt: new Date() } });
   });
+  app.delete("/notifications/:id", { preHandler: requireAuth }, async (request, reply) => {
+    const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "INVALID_INPUT" });
+    const result = await prisma.notification.deleteMany({ where: { id: params.data.id, userId: request.auth!.userId } });
+    if (result.count === 0) return reply.code(404).send({ error: "NOTIFICATION_NOT_FOUND" });
+    return reply.code(204).send();
+  });
+
+  app.delete("/notifications", { preHandler: requireAuth }, async (request, reply) => {
+    await prisma.notification.deleteMany({ where: { userId: request.auth!.userId } });
+    return reply.code(204).send();
+  });
+
 }
+

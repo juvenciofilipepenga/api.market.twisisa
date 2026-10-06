@@ -40,3 +40,9 @@ export function uploadChatAttachment(buffer: Buffer, mimeType: string, folder = 
     stream.end(buffer);
   });
 }
+
+// Remove um ficheiro já ligado a um produto. Best-effort: se falhar, o registo na BD já foi apagado e fica só um órfão no Cloudinary.
+export async function deleteCloudinaryAsset(publicId: string): Promise<void> {
+  if (!cloudinaryConfigured) return;
+  await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+}

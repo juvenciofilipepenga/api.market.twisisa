@@ -48,6 +48,8 @@ export function parseEnv(source: NodeJS.ProcessEnv) {
 }
 
 export const env = parseEnv(process.env);
+// CORS_ORIGIN aceita uma lista separada por vírgulas (ex.: domínio com e sem www).
+export const corsOrigins = env.CORS_ORIGIN.split(",").map((origin) => origin.trim()).filter(Boolean);
 export const cloudinaryConfigured = Boolean(
   env.CLOUDINARY_CLOUD_NAME && env.CLOUDINARY_API_KEY && env.CLOUDINARY_API_SECRET
 );

@@ -1,6 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { OrderStatus, PaymentStatus, RoleName } from "../generated/prisma/client.js";
+import { OrderStatus, PaymentStatus, Prisma, RoleName } from "../generated/prisma/client.js";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
@@ -34,6 +34,11 @@ const activePaymentStates: PaymentStatus[] = [
 const webhookSchema = z.object({ status: z.enum(["SUCCESS", "FAILED", "TIMEOUT", "PENDING_CONFIRMATION"]), transactionCode: z.string().max(120).optional(), providerPaymentId: z.string().max(120).optional(), failureCode: z.string().max(80).optional(), failureMessage: z.string().max(250).optional() });
 
 const finalPaymentStates: PaymentStatus[] = [PaymentStatus.SUCCESS, PaymentStatus.PAYMENT_CONFIRMED];
+// Estados em que o cliente pode (re)submeter comprovativo de um pagamento manual.
+const proofAllowedStates: PaymentStatus[] = [
+  PaymentStatus.INITIATED, PaymentStatus.PENDING_CONFIRMATION, PaymentStatus.PAYMENT_PENDING,
+  PaymentStatus.PROOF_SUBMITTED, PaymentStatus.PAYMENT_REJECTED
+];
 const payableOrderStates: OrderStatus[] = [OrderStatus.PENDING_PAYMENT, OrderStatus.PAYMENT_REVIEW];
 
 function safeEqual(a: string, b: string): boolean {
@@ -56,7 +61,14 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
     const reference = randomReference("TW-PAY");
     // O registo é criado ANTES de chamar o gateway: se a chamada falhar, fica um Payment em FAILED
     // (com o motivo), nunca um pagamento "fantasma" no gateway sem correspondência na nossa BD.
-    const payment = await prisma.payment.create({ data: { orderId: order.id, provider: body.data.provider, status: PaymentStatus.INITIATED, amountMzn: order.totalMzn, method: body.data.method, paymentNumber, reference } });
+    let payment;
+    try {
+      payment = await prisma.payment.create({ data: { orderId: order.id, provider: body.data.provider, status: PaymentStatus.INITIATED, amountMzn: order.totalMzn, method: body.data.method, paymentNumber, reference } });
+    } catch (error) {
+      // Índice único parcial (migração 005): só um pagamento ativo por encomenda, mesmo com pedidos simultâneos.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return reply.code(409).send({ error: "PAYMENT_ALREADY_ACTIVE" });
+      throw error;
+    }
     try {
       const provider = getPaymentProvider(body.data.provider);
       const providerResult = await provider.createPayment({
@@ -133,7 +145,16 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
         }
       }
       return { applied: true, orderPaid };
+    }).catch(async (error: unknown) => {
+      // Notificação tardia de um pagamento antigo enquanto já existe outro ativo na mesma encomenda: responde 200 (para o
+      // gateway não reenviar para sempre) e deixa o aviso ao admin, que decide o reembolso/reconciliação.
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        await notifyAdmins({ type: "PAYMENT", title: "Pagamento em conflito", message: `O gateway notificou ${current.reference} (${body.data.status}) mas a encomenda ${current.order.orderNumber} já tem outro pagamento ativo. Verificar manualmente.`, data: { paymentId: current.id, orderId: current.orderId } }).catch((notifyError) => request.log.error(notifyError, "conflict alert failed"));
+        return null;
+      }
+      throw error;
     });
+    if (!outcome) return { ok: true, ignored: true, conflict: true };
     if (!outcome.applied) return { ok: true, ignored: true };
 
     // Efeitos secundários: uma falha aqui não pode devolver 500 ao gateway (provocaria reenvios).
@@ -170,12 +191,15 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
     // Só para pagamentos manuais, e nunca depois de já confirmado.
     if (payment.provider !== "MANUAL") return reply.code(409).send({ error: "PROOF_NOT_APPLICABLE" });
     if (finalPaymentStates.includes(payment.status)) return reply.code(409).send({ error: "PAYMENT_ALREADY_FINAL" });
+    if (!proofAllowedStates.includes(payment.status)) return reply.code(409).send({ error: "PAYMENT_NOT_ACCEPTING_PROOF" });
+    if (!payableOrderStates.includes(payment.order.status)) return reply.code(409).send({ error: "ORDER_PAYMENT_NOT_ALLOWED" });
     const parsed = z.object({ proofUrl: z.string().url().max(2000) }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const proofUrl = new URL(parsed.data.proofUrl);
     // Só https, e só o domínio do Cloudinary quando este está configurado — impede javascript:/data: guardados e abertos no painel do admin.
     if (proofUrl.protocol !== "https:") return reply.code(400).send({ error: "PROOF_URL_MUST_BE_HTTPS" });
-    if (env.CLOUDINARY_CLOUD_NAME && !proofUrl.hostname.endsWith("res.cloudinary.com")) return reply.code(400).send({ error: "PROOF_URL_MUST_BE_UPLOADED" });
+    // Hostname exato e pasta da NOSSA conta (/<cloud_name>/): endsWith() aceitava qualquer subdomínio e qualquer conta Cloudinary.
+    if (env.CLOUDINARY_CLOUD_NAME && (proofUrl.hostname !== "res.cloudinary.com" || !proofUrl.pathname.startsWith(`/${env.CLOUDINARY_CLOUD_NAME}/`))) return reply.code(400).send({ error: "PROOF_URL_MUST_BE_UPLOADED" });
     const updated = await prisma.$transaction(async (tx) => {
       const result = await tx.payment.update({ where: { id: payment.id }, data: { proofUrl: parsed.data.proofUrl, status: PaymentStatus.PROOF_SUBMITTED } });
       await tx.order.updateMany({ where: { id: payment.orderId, status: OrderStatus.PENDING_PAYMENT }, data: { status: OrderStatus.PAYMENT_REVIEW } });
@@ -202,7 +226,12 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
         if (payment.order.status !== OrderStatus.PAYMENT_REVIEW && payment.order.status !== OrderStatus.PENDING_PAYMENT) throw new Error("ORDER_NOT_REVIEWABLE");
         const status = body.data.approved ? PaymentStatus.PAYMENT_CONFIRMED : PaymentStatus.PAYMENT_REJECTED;
         const updatedPayment = await tx.payment.update({ where: { id: payment.id }, data: { status, confirmedAt: body.data.approved ? new Date() : undefined, failureMessage: body.data.approved ? undefined : (body.data.note ?? "Rejected by admin") } });
-        if (body.data.approved) await tx.order.update({ where: { id: payment.orderId }, data: { status: OrderStatus.PAID, statusHistory: { create: { from: payment.order.status, to: OrderStatus.PAID, reason: body.data.note ?? "Payment proof approved", actorId: request.auth!.userId } } } });
+        if (body.data.approved) {
+          await tx.order.update({ where: { id: payment.orderId }, data: { status: OrderStatus.PAID, statusHistory: { create: { from: payment.order.status, to: OrderStatus.PAID, reason: body.data.note ?? "Payment proof approved", actorId: request.auth!.userId } } } });
+        } else if (payment.order.status === OrderStatus.PAYMENT_REVIEW) {
+          // Comprovativo rejeitado: volta a aguardar pagamento, para o cliente poder reenviar ou escolher outro método.
+          await tx.order.update({ where: { id: payment.orderId }, data: { status: OrderStatus.PENDING_PAYMENT, statusHistory: { create: { from: OrderStatus.PAYMENT_REVIEW, to: OrderStatus.PENDING_PAYMENT, reason: body.data.note ?? "Payment proof rejected", actorId: request.auth!.userId } } } });
+        }
         return { updatedPayment, order: payment.order };
       });
       try {

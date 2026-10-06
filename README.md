@@ -16,9 +16,10 @@ Backend base for Twisisa Market, using Fastify, TypeScript, Prisma Client and Ne
 
 1. `npm install && npm run check` (this was not run in this environment — no network access — so run it yourself before deploying).
 2. Provision Neon Postgres, set `DATABASE_URL`/`DIRECT_URL`, run `npm run migrate`.
-3. Generate a real `JWT_SECRET` (see `.env.example`) and set `CORS_ORIGIN` to your real frontend origin.
+3. Generate a real `JWT_SECRET` (see `.env.example`) and set `CORS_ORIGIN` to your real frontend origin (several origins can be listed, comma-separated).
 4. Only run `npm run seed` in development/staging: in `NODE_ENV=production` it does nothing on purpose, so create your first admin manually (e.g. a one-off script using `hashPassword` from `src/lib/auth.ts`).
-5. Deploy to a host that keeps a long-running process (Render, Railway, Fly — not a serverless platform), since Socket.IO needs persistent connections.
+5. Preferred: deploy to a host that keeps a long-running process (Render, Railway, Fly), since Socket.IO needs persistent connections and `src/server.ts` is the entry point (`npm start`).
+   Vercel is supported only as a degraded mode through `api/index.ts` + `vercel.json` (serverless, no Socket.IO): the REST API works, but real-time events (chat, notifications) are silently dropped, so clients must fall back to polling `GET /api/v1/notifications` and `GET /api/v1/chat/conversations/:id/messages`.
 6. Set `NODE_ENV=production` so the app trusts the platform's reverse proxy (`trustProxy`) for the real client IP.
 7. Configure Cloudinary if you need product/chat images, and `ZUMBOPAY_*` if/when the gateway is ready; both are optional and the app runs without them (manual payments and file-less chat still work).
 8. Set `GROQ_API_KEY` if you want the support chat to answer free-text questions; without it, anything beyond the numbered menu is escalated straight to an admin.
@@ -29,10 +30,21 @@ Backend base for Twisisa Market, using Fastify, TypeScript, Prisma Client and Ne
 - `POST /api/v1/admin/products`, `PATCH /api/v1/admin/products/:id` — create/update a product (price, stock, description, category).
 - `POST /api/v1/admin/products/:id/stock` — adjust stock by a signed delta; rejected if it would go negative.
 - `POST /api/v1/admin/products/:id/images` (after `POST /api/v1/media/image`), `DELETE /api/v1/admin/products/:id/images/:imageId`.
-- `POST /api/v1/admin/orders/:id/status` — advance an order through its lifecycle (`PROCESSING` → `READY_FOR_SHIPMENT` → `SHIPPED` → `OUT_FOR_DELIVERY` → `DELIVERED`, plus `CANCELLATION_REQUESTED`/`REFUND_PENDING`/`REFUNDED`); only the transitions listed in `adminTransitions` (`src/routes/orders.ts`) are allowed, and moving to `REFUNDED` restocks the items.
+- `POST /api/v1/admin/orders/:id/status` — advance an order through its lifecycle (`PROCESSING` → `READY_FOR_SHIPMENT` → `SHIPPED` → `OUT_FOR_DELIVERY` → `DELIVERED`, plus `CANCELLATION_REQUESTED`/`REFUND_PENDING`/`REFUNDED`); only the transitions listed in `adminTransitions` (`src/routes/orders.ts`) are allowed (including `CANCELLATION_REQUESTED` → `CANCELLED`). Stock is restocked exactly once: on `CANCELLED`, or on `REFUNDED` if the order never went through `CANCELLED`.
+- `PATCH /api/v1/admin/users/:id/status` — set an account to `ACTIVE`/`SUSPENDED`/`BLOCKED`. An admin cannot change their own status; only a `SUPER_ADMIN` can change admin accounts. Existing access tokens stay valid until they expire (`JWT_EXPIRES_IN`); new logins are refused immediately.
 - `GET /api/v1/admin/chat/conversations`, `POST /api/v1/admin/chat/conversations/:id/reply`, `POST /api/v1/admin/chat/conversations/:id/close`.
 
+## Catalogue, variants and reviews
+
+- Products may have variants (`colorHex` and/or `size`, each with its own `stock`). When a product has active variants, `Product.stock` is the sum of the variants' stock and `POST /api/v1/orders` requires a `variantId` per item; stock is decremented on both the variant and the product, and restocked on both when an order is cancelled/refunded.
+- `PATCH /api/v1/admin/products/:id` with `variants` syncs by (colour, size): matching variants are updated in place, new ones are created, and variants left out are deactivated with stock 0 (never deleted, so past orders keep their `variantId`).
+- `POST /api/v1/admin/products/:id/stock` is rejected with `VARIANT_STOCK_MANAGED_IN_FORM` for products with variants.
+- `GET /api/v1/products/:id/reviews` is public; `POST` requires auth and a paid/shipped/delivered order containing the product (`PURCHASE_REQUIRED` otherwise), one review per user per product.
+- Other endpoints: `/notifications` (list, read, delete), `/referrals/me`, `/referrals/lookup/:code`, `/invoices/:id` and `/invoices/:id/pdf`, `/users/me`, `/admin/users`, `/admin/categories` (PATCH/DELETE), `/admin/products` (list, DELETE, `bulk`).
+
 ## Payments
+
+- The database allows only one *active* payment per order (partial unique index, migration `005`); concurrent initiations get `PAYMENT_ALREADY_ACTIVE`. If an admin rejects a proof, the order goes back to `PENDING_PAYMENT` so the customer can resubmit or pick another method.
 
 - `POST /api/v1/orders/:id/payments/initiate` only works while the order is `PENDING_PAYMENT`, and only one active payment is allowed per order at a time.
 - `provider: "MANUAL"` requires `method: "MPESA"` or `"EMOLA"` with a matching Mozambican phone number (`84`/`85` for M-Pesa, `86`/`87` for e-Mola, with or without the `258` prefix), or `method: "CARD"` with no card number — card payment is handled offline (e.g. POS on delivery); this backend never receives or stores card numbers. The customer then submits proof via `POST /api/v1/payments/:id/proof`, and an admin approves/rejects it via `POST /api/v1/admin/payments/:id/review`.
@@ -75,6 +87,8 @@ npm run migrate:rollback
 ```
 
 Each migration is numbered, executed in order, wrapped in a transaction, and stored with a SHA-256 checksum in `_schema_migrations`.
+
+Never patch the database with ad-hoc scripts outside `migrations/`; if a migration was already applied by hand, make it idempotent (`IF NOT EXISTS`) instead. Never edit a migration that is already recorded in `_schema_migrations` (the runner aborts with `Migration checksum changed`).
 
 ## Health
 
