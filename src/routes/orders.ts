@@ -58,7 +58,41 @@ const restockOnTransition = new Set<OrderStatus>([
   OrderStatus.REFUNDED
 ]);
 
+const listOrdersSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  // "Faturas": só as encomendas que já têm fatura emitida.
+  invoiced: z.enum(["true", "false"]).optional()
+});
+
 export async function orderRoutes(app: FastifyInstance): Promise<void> {
+  // As encomendas do próprio cliente (nunca de outros: o userId vem do token validado, não do pedido).
+  // Resposta pequena de propósito (sem pagamentos nem histórico): o detalhe completo é GET /orders/:id.
+  app.get("/orders", { preHandler: requireAuth }, async (request, reply) => {
+    const q = listOrdersSchema.parse(request.query);
+    const where = {
+      userId: request.auth!.userId,
+      ...(q.invoiced === "true" ? { invoice: { isNot: null } } : {})
+    };
+    const [data, total] = await Promise.all([
+      prisma.order.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: (q.page - 1) * q.limit,
+        take: q.limit,
+        select: {
+          id: true, orderNumber: true, status: true, totalMzn: true, discountMzn: true, createdAt: true,
+          invoice: { select: { id: true, invoiceNumber: true } },
+          items: { select: { productName: true, quantity: true }, orderBy: { id: "asc" }, take: 2 },
+          _count: { select: { items: true } }
+        }
+      }),
+      prisma.order.count({ where })
+    ]);
+    reply.header("Cache-Control", "private, no-store");
+    return { data, pagination: { page: q.page, limit: q.limit, total } };
+  });
+
   app.post("/orders", { preHandler: requireAuth }, async (request, reply) => {
     const parsed = createOrderSchema.safeParse(request.body);
 

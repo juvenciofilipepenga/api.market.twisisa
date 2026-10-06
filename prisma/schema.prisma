@@ -205,6 +205,7 @@ model Order {
   statusHistory OrderStatusHistory[]
   invoice Invoice?
   @@index([userId])
+  @@index([userId, createdAt(sort: Desc)])
   @@index([status])
   @@index([createdAt])
 }
