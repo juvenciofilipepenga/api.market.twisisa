@@ -55,19 +55,20 @@ function baseUrl(): string {
   return (env.ZUMBOPAY_API_BASE_URL ?? ZUMBOPAY_DEFAULT_BASE_URL).replace(/\/$/, "");
 }
 
-async function call(method: "GET" | "POST", path: string, body?: unknown): Promise<Record<string, unknown>> {
+// timeoutMs: 20 s por omissão (consultas de estado, link de cartão). O /charges usa mais, porque o STK push pode demorar a responder.
+async function call(method: "GET" | "POST", path: string, body?: unknown, timeoutMs = 20_000): Promise<Record<string, unknown>> {
   if (!env.ZUMBOPAY_API_KEY) throw new ZumboPayError("NOT_CONFIGURED", "ZUMBOPAY_NOT_CONFIGURED");
   let response: Response;
   try {
     response = await fetch(`${baseUrl()}${path}`, {
       method,
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(timeoutMs),
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
         Authorization: `Bearer ${env.ZUMBOPAY_API_KEY.replace(/\s+/g, "")}`,
         "X-ZumboPay-Client": "twisisa-market/1.0",
-        // Mesma chave em retentativas = o ZumboPay não duplica a cobrança.
+        // Chave nova em cada chamada (este cliente não faz retentativas automáticas).
         ...(method === "POST" ? { "Idempotency-Key": randomUUID() } : {})
       },
       body: body === undefined ? undefined : JSON.stringify(body)
@@ -92,7 +93,7 @@ export async function createCharge(input: { method: "MPESA" | "EMOLA"; walletId:
   if (zumboPayMock) return mock.createCharge(input);
   const data = asData(await call("POST", "/charges", {
     wallet_id: input.walletId, amount: input.amountMzn, msisdn: input.msisdn, customer_name: input.customerName, source_id: input.sourceId
-  }));
+  }, 55_000));
   if (typeof data.reference !== "string" || !data.reference) throw new ZumboPayError("BAD_RESPONSE", "missing reference");
   return { reference: data.reference, state: normalizeState(data.status), description: typeof data.description === "string" ? data.description : undefined, code: typeof data.code === "string" ? data.code : undefined };
 }
