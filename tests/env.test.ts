@@ -8,7 +8,7 @@ describe("env", () => {
     const env = parseEnv({
       ...base,
       CLOUDINARY_CLOUD_NAME: "", CLOUDINARY_API_KEY: "", CLOUDINARY_API_SECRET: "",
-      ZUMBOPAY_ENABLED: "false", ZUMBOPAY_API_BASE_URL: "", ZUMBOPAY_API_KEY: "", ZUMBOPAY_MERCHANT_ID: "", ZUMBOPAY_WEBHOOK_SECRET: ""
+      ZUMBOPAY_ENABLED: "false", ZUMBOPAY_API_BASE_URL: "", ZUMBOPAY_API_KEY: "", ZUMBOPAY_WEBHOOK_SECRET: ""
     });
     expect(env.CLOUDINARY_API_KEY).toBeUndefined();
     expect(env.ZUMBOPAY_API_BASE_URL).toBeUndefined();
@@ -25,6 +25,11 @@ describe("env", () => {
 
   it("requires a webhook secret when ZumboPay is enabled", () => {
     expect(() => parseEnv({ ...base, ZUMBOPAY_ENABLED: "true" })).toThrow();
+  });
+
+  it("never allows the payment simulator in production", () => {
+    expect(() => parseEnv({ ...base, NODE_ENV: "production", ZUMBOPAY_MOCK: "true" })).toThrow();
+    expect(parseEnv({ ...base, NODE_ENV: "development", ZUMBOPAY_MOCK: "true" }).ZUMBOPAY_MOCK).toBe(true);
   });
 
   it("defaults shipping to 0 and reads SHIPPING_FLAT_MZN", () => {

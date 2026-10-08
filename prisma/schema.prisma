@@ -256,6 +256,7 @@ model Payment {
   failureMessage String?
   authenticatedAt DateTime?
   confirmedAt DateTime?
+  expiresAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -279,6 +280,7 @@ model Invoice {
   paymentMethod String?
   paymentReference String?
   pdfUrl String?
+  issuer Json?
   issuedAt DateTime @default(now())
   createdAt DateTime @default(now())
   order Order @relation(fields: [orderId], references: [id])
@@ -381,4 +383,29 @@ model Review {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@unique([productId, userId])
   @@index([productId, createdAt])
+}
+
+model InvoiceSettings {
+  id String @id @default("main")
+  companyName String @default("Twisisa Market")
+  legalName String?
+  nuit String?
+  address String?
+  city String?
+  phone String?
+  email String?
+  website String?
+  logoUrl String?
+  signatureUrl String?
+  signerName String?
+  signerRole String?
+  accentColor String @default("#EE0006")
+  numberPrefix String @default("FT")
+  nextNumber Int @default(1)
+  footerNote String?
+  terms String?
+  bankDetails String?
+  vatRatePercent Decimal @default(0) @db.Decimal(5, 2)
+  showSignature Boolean @default(true)
+  updatedAt DateTime @updatedAt
 }

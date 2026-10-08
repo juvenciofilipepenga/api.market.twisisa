@@ -1,8 +1,8 @@
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { OrderStatus, PaymentStatus, Prisma, RoleName } from "../generated/prisma/client.js";
 import { z } from "zod";
-import { env } from "../config/env.js";
+import { env, frontendUrl, zumboPayConfigured, zumboPayMock } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { randomReference } from "../lib/auth.js";
 import { isAdmin, requireAuth, requireRole } from "../middleware/auth.js";
@@ -11,13 +11,26 @@ import { ensureInvoice } from "../services/invoice.js";
 import { notifyAdmins, notifyUser } from "../services/notifications.js";
 import { getPaymentProvider } from "../services/payment.js";
 import { notifyReferralCompletedIfFirst } from "../services/referrals.js";
+import { cancelPendingPayment, settlePayment, toView, type PaymentView } from "../services/paymentFlow.js";
+import { createCardCheckout, createCharge, walletFor, ZumboPayError, type ZpMethod } from "../services/zumbopay.js";
 
 // Rede moçambicana pelo prefixo do número (sem indicativo ou com +258): M-Pesa 84/85, e-Mola 86/87.
 const mpesaPhone = /^(258)?8[45]\d{7}$/;
 const emolaPhone = /^(258)?8[67]\d{7}$/;
 
+// Telefone móvel → 9 dígitos (aceita +258 / 258 à frente e espaços).
+const cleanPhone = (value: string) => value.replace(/[\s-]/g, "").replace(/^\+?258/, "");
+const phoneField = (regex: RegExp, message: string) => z.string().trim().transform(cleanPhone).pipe(z.string().regex(regex, message));
+const walletMpesa = /^8[45]\d{7}$/;
+const walletEmola = /^8[67]\d{7}$/;
+
 const initiateSchema = z.discriminatedUnion("provider", [
-  z.object({ provider: z.literal("ZUMBOPAY"), method: z.string().trim().min(2).max(40) }),
+  // Fluxo real: STK push (M-Pesa / e-Mola) ou página segura de cartão, tudo confirmado pelo ZumboPay.
+  z.discriminatedUnion("method", [
+    z.object({ provider: z.literal("ZUMBOPAY"), method: z.literal("MPESA"), paymentNumber: phoneField(walletMpesa, "Número M-Pesa inválido (deve começar por 84 ou 85)") }),
+    z.object({ provider: z.literal("ZUMBOPAY"), method: z.literal("EMOLA"), paymentNumber: phoneField(walletEmola, "Número e-Mola inválido (deve começar por 86 ou 87)") }),
+    z.object({ provider: z.literal("ZUMBOPAY"), method: z.literal("CARD") })
+  ]),
   z.discriminatedUnion("method", [
     z.object({ provider: z.literal("MANUAL"), method: z.literal("MPESA"), paymentNumber: z.string().trim().regex(mpesaPhone, "Número M-Pesa inválido (deve começar por 84 ou 85)") }),
     z.object({ provider: z.literal("MANUAL"), method: z.literal("EMOLA"), paymentNumber: z.string().trim().regex(emolaPhone, "Número e-Mola inválido (deve começar por 86 ou 87)") }),
@@ -46,21 +59,77 @@ function safeEqual(a: string, b: string): boolean {
 }
 
 export async function paymentRoutes(app: FastifyInstance): Promise<void> {
+  // Métodos realmente disponíveis (carteira configurada). O checkout só mostra o que funciona.
+  app.get("/payments/methods", async () => {
+    const methods = (["MPESA", "EMOLA", "CARD"] as const).filter((m) => zumboPayConfigured && walletFor(m));
+    return { methods, sandbox: zumboPayMock, confirmWindowSeconds: env.PAYMENT_CONFIRM_WINDOW_SECONDS };
+  });
+
   app.post("/orders/:id/payments/initiate", { preHandler: requireAuth }, async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
     const body = initiateSchema.safeParse(request.body);
-    if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_INPUT" });
+    if (!params.success) return reply.code(400).send({ error: "INVALID_INPUT" });
+    if (!body.success) return reply.code(400).send({ error: "INVALID_INPUT", field: body.error.issues[0]?.path.join(".") });
     const order = await prisma.order.findUnique({ where: { id: params.data.id }, include: { user: true, payments: true } });
     if (!order) return reply.code(404).send({ error: "ORDER_NOT_FOUND" });
     if (order.userId !== request.auth!.userId) return reply.code(403).send({ error: "FORBIDDEN" });
     // Só se pode iniciar pagamento enquanto a encomenda aguarda pagamento (não em PAID, SHIPPED, etc.).
     if (order.status !== OrderStatus.PENDING_PAYMENT) return reply.code(409).send({ error: "ORDER_PAYMENT_NOT_ALLOWED" });
-    // Um único pagamento ativo por encomenda; um novo só pode ser iniciado depois de o anterior falhar/expirar/ser rejeitado.
-    if (order.payments.some((payment) => activePaymentStates.includes(payment.status))) return reply.code(409).send({ error: "PAYMENT_ALREADY_ACTIVE" });
+    // Um único pagamento ativo por encomenda. O ecrã de pagamento usa o paymentId devolvido para RETOMAR a espera.
+    // Antes de recusar, actualiza o estado dos pendentes do ZumboPay: pode já ter expirado ou falhado (e então liberta o caminho).
+    for (const existing of order.payments.filter((payment) => payment.provider === "ZUMBOPAY" && activePaymentStates.includes(payment.status))) {
+      await settlePayment(existing.id, request.log, { force: true });
+    }
+    const stillActive = await prisma.payment.findFirst({ where: { orderId: order.id, status: { in: activePaymentStates } } });
+    if (stillActive) return reply.code(409).send({ error: "PAYMENT_ALREADY_ACTIVE", paymentId: stillActive.id });
+
     const paymentNumber = "paymentNumber" in body.data ? body.data.paymentNumber : undefined;
+
+    if (body.data.provider === "ZUMBOPAY") {
+      const method = body.data.method as ZpMethod;
+      const walletId = walletFor(method);
+      if (!zumboPayConfigured || !walletId) return reply.code(503).send({ error: "PAYMENT_METHOD_UNAVAILABLE" });
+      const reference = randomReference("TW-PAY");
+      // Cartão: o cliente passa pelo 3DS na página do banco (pode demorar). Carteira móvel: janela curta para o PIN.
+      const windowMs = method === "CARD" ? 30 * 60_000 : env.PAYMENT_CONFIRM_WINDOW_SECONDS * 1000;
+      let payment;
+      try {
+        payment = await prisma.payment.create({ data: { orderId: order.id, provider: "ZUMBOPAY", status: PaymentStatus.INITIATED, amountMzn: order.totalMzn, method, paymentNumber, reference, expiresAt: new Date(Date.now() + windowMs) } });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return reply.code(409).send({ error: "PAYMENT_ALREADY_ACTIVE" });
+        throw error;
+      }
+      // O registo existe ANTES de falar com o ZumboPay: se a chamada falhar, fica um Payment FAILED com o motivo.
+      try {
+        let checkoutUrl: string | undefined;
+        let providerReference: string;
+        if (method === "CARD") {
+          const card = await createCardCheckout({ walletId, amountMzn: Number(order.totalMzn), title: `Encomenda ${order.orderNumber}`, sourceId: payment.id, returnUrl: new URL(`/pagamento/${order.id}`, frontendUrl).toString() });
+          providerReference = card.reference;
+          checkoutUrl = card.checkoutUrl;
+        } else {
+          const charge = await createCharge({ method: method as "MPESA" | "EMOLA", walletId, amountMzn: Number(order.totalMzn), msisdn: paymentNumber!, customerName: order.user.name || "Cliente", sourceId: payment.id });
+          providerReference = charge.reference;
+        }
+        await prisma.payment.update({ where: { id: payment.id }, data: { providerPaymentId: providerReference, status: PaymentStatus.AUTHENTICATING, authenticatedAt: new Date() } });
+        try {
+          await notifyAdmins({ type: "PAYMENT", title: "Novo pagamento iniciado", message: `Pagamento ${reference} iniciado.`, data: { paymentId: payment.id, orderId: order.id } });
+        } catch (error) {
+          request.log.error(error, "payment initiation side effects failed");
+        }
+        // Se o ZumboPay já respondeu (sucesso/falha imediatos), reflecte-o já; senão fica pendente à espera do PIN.
+        const view: PaymentView = (await settlePayment(payment.id, request.log, { force: true })) ?? (await toView((await prisma.payment.findUniqueOrThrow({ where: { id: payment.id } }))));
+        return reply.code(201).send({ ...view, checkoutUrl });
+      } catch (error) {
+        const kind = error instanceof ZumboPayError ? error.kind : "UNKNOWN";
+        request.log.error(error, "zumbopay initiation failed");
+        await prisma.payment.update({ where: { id: payment.id }, data: { status: PaymentStatus.FAILED, failureCode: "UNAVAILABLE", failureMessage: (error instanceof Error ? error.message : "PAYMENT_INITIATION_FAILED").slice(0, 250) } });
+        return reply.code(kind === "NOT_CONFIGURED" ? 503 : 502).send({ error: "PAYMENT_PROVIDER_ERROR", paymentId: payment.id });
+      }
+    }
+
+    // MANUAL (legado): comprovativo submetido pelo cliente e revisto pelo admin.
     const reference = randomReference("TW-PAY");
-    // O registo é criado ANTES de chamar o gateway: se a chamada falhar, fica um Payment em FAILED
-    // (com o motivo), nunca um pagamento "fantasma" no gateway sem correspondência na nossa BD.
     let payment;
     try {
       payment = await prisma.payment.create({ data: { orderId: order.id, provider: body.data.provider, status: PaymentStatus.INITIATED, amountMzn: order.totalMzn, method: body.data.method, paymentNumber, reference } });
@@ -70,29 +139,77 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
       throw error;
     }
     try {
-      const provider = getPaymentProvider(body.data.provider);
-      const providerResult = await provider.createPayment({
-        amountMzn: Number(order.totalMzn),
-        method: body.data.method,
-        customerPhone: paymentNumber ?? order.user.phone ?? undefined,
-        reference,
-        webhookUrl: env.APP_PUBLIC_URL ? new URL(`/api/v1/payments/${payment.id}/webhook`, env.APP_PUBLIC_URL).toString() : undefined,
-        returnUrl: env.APP_PUBLIC_URL ? new URL(`/pagamento/${payment.id}`, env.APP_PUBLIC_URL).toString() : undefined
-      });
-      const status = providerResult.status === "PENDING_CONFIRMATION" ? PaymentStatus.PENDING_CONFIRMATION : PaymentStatus.INITIATED;
-      const updated = await prisma.payment.update({ where: { id: payment.id }, data: { status, providerPaymentId: providerResult.providerPaymentId } });
+      const providerResult = await getPaymentProvider("MANUAL").createPayment({ amountMzn: Number(order.totalMzn), method: body.data.method, customerPhone: paymentNumber ?? order.user.phone ?? undefined, reference });
+      const updated = await prisma.payment.update({ where: { id: payment.id }, data: { status: providerResult.status === "PENDING_CONFIRMATION" ? PaymentStatus.PENDING_CONFIRMATION : PaymentStatus.INITIATED } });
       try {
-        await notifyUser({ userId: order.userId, type: "PAYMENT", title: "Pagamento iniciado", message: `Referência ${updated.reference}.`, data: { paymentId: updated.id, reference: updated.reference, status: updated.status, checkoutUrl: providerResult.checkoutUrl } });
+        await notifyUser({ userId: order.userId, type: "PAYMENT", title: "Pagamento iniciado", message: `Referência ${updated.reference}.`, data: { paymentId: updated.id, reference: updated.reference, status: updated.status } });
         await notifyAdmins({ type: "PAYMENT", title: "Novo pagamento iniciado", message: `Pagamento ${updated.reference} iniciado.`, data: { paymentId: updated.id, orderId: order.id } });
       } catch (error) {
         request.log.error(error, "payment initiation side effects failed");
       }
-      return reply.code(201).send({ paymentId: updated.id, reference: updated.reference, status: updated.status, amountMzn: updated.amountMzn, paymentNumber: updated.paymentNumber, checkoutUrl: providerResult.checkoutUrl });
+      return reply.code(201).send({ paymentId: updated.id, reference: updated.reference, status: updated.status, amountMzn: updated.amountMzn, paymentNumber: updated.paymentNumber });
     } catch (error) {
       const message = error instanceof Error ? error.message : "PAYMENT_INITIATION_FAILED";
       await prisma.payment.update({ where: { id: payment.id }, data: { status: PaymentStatus.FAILED, failureMessage: message } });
-      return reply.code(message === "ZUMBOPAY_NOT_CONFIGURED" ? 503 : 502).send({ error: message, paymentId: payment.id });
+      return reply.code(502).send({ error: message, paymentId: payment.id });
     }
+  });
+
+  // Estado em tempo real para o ecrã de espera (polling). Cada chamada pergunta ao ZumboPay (com intervalo mínimo no servidor).
+  app.get("/payments/:id/status", { preHandler: requireAuth }, async (request, reply) => {
+    const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "INVALID_INPUT" });
+    const payment = await prisma.payment.findUnique({ where: { id: params.data.id }, include: { order: { select: { userId: true } } } });
+    if (!payment) return reply.code(404).send({ error: "PAYMENT_NOT_FOUND" });
+    if (!isAdmin(request.auth!.roles) && payment.order.userId !== request.auth!.userId) return reply.code(403).send({ error: "FORBIDDEN" });
+    const view = await settlePayment(payment.id, request.log);
+    return view ?? reply.code(404).send({ error: "PAYMENT_NOT_FOUND" });
+  });
+
+  // "Mudar método" / "Encerrar": liberta a encomenda para um novo pagamento (se o ZumboPay ainda não confirmou).
+  app.post("/payments/:id/cancel", { preHandler: requireAuth }, async (request, reply) => {
+    const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "INVALID_INPUT" });
+    const payment = await prisma.payment.findUnique({ where: { id: params.data.id }, include: { order: { select: { userId: true } } } });
+    if (!payment) return reply.code(404).send({ error: "PAYMENT_NOT_FOUND" });
+    if (payment.order.userId !== request.auth!.userId) return reply.code(403).send({ error: "FORBIDDEN" });
+    if (payment.provider !== "ZUMBOPAY") return reply.code(409).send({ error: "CANCEL_NOT_APPLICABLE" });
+    const view = await cancelPendingPayment(payment.id, request.log);
+    return view ?? reply.code(404).send({ error: "PAYMENT_NOT_FOUND" });
+  });
+
+  // Webhook do ZumboPay (assinatura HMAC SHA-256 sobre `${X-Timestamp}.${corpo cru}`, janela de 5 min).
+  // O corpo cru é indispensável para verificar a assinatura, por isso este contexto tem o seu próprio parser JSON.
+  // O conteúdo do webhook NUNCA decide o estado: serve só de aviso para ir perguntar ao ZumboPay (settlePayment).
+  await app.register(async (scope) => {
+    scope.addContentTypeParser("application/json", { parseAs: "string" }, (_request, body, done) => {
+      try { done(null, { raw: body as string, json: JSON.parse(body as string) }); } catch (error) { const err = error as Error & { statusCode?: number }; err.statusCode = 400; done(err); }
+    });
+    scope.post("/webhooks/zumbopay", async (request, reply) => {
+      const secret = env.ZUMBOPAY_WEBHOOK_SECRET;
+      if (!secret) return reply.code(503).send({ error: "WEBHOOK_NOT_CONFIGURED" });
+      const parsedBody = request.body as { raw?: string; json?: Record<string, unknown> } | undefined;
+      if (!parsedBody?.raw || !parsedBody.json) return reply.code(400).send({ error: "INVALID_BODY" });
+      const { raw, json } = parsedBody as { raw: string; json: Record<string, unknown> };
+      const signature = request.headers["x-signature"];
+      const timestamp = request.headers["x-timestamp"];
+      if (typeof signature !== "string" || typeof timestamp !== "string") return reply.code(401).send({ error: "MISSING_SIGNATURE" });
+      const ts = Number(timestamp);
+      if (!Number.isFinite(ts) || Math.abs(Date.now() - ts) > 5 * 60_000) return reply.code(401).send({ error: "STALE_TIMESTAMP" });
+      const expected = createHmac("sha256", secret).update(`${timestamp}.${raw}`).digest("hex");
+      if (!safeEqual(expected, signature.replace(/^sha256=/i, "").trim().toLowerCase())) return reply.code(401).send({ error: "INVALID_SIGNATURE" });
+
+      const data = (json.data && typeof json.data === "object" ? json.data : json) as Record<string, unknown>;
+      const meta = (data.metadata && typeof data.metadata === "object" ? data.metadata : {}) as Record<string, unknown>;
+      const reference = String(data.reference ?? data.payment_reference ?? "");
+      const sourceId = String(data.source_id ?? meta.source_id ?? "");
+      if (!reference && !sourceId) return reply.code(400).send({ error: "MISSING_FIELDS" });
+      const payment = await prisma.payment.findFirst({ where: { provider: "ZUMBOPAY", OR: [...(reference ? [{ providerPaymentId: reference }] : []), ...(sourceId ? [{ id: sourceId }] : [])] } });
+      // Referência desconhecida: 202 para o ZumboPay não reenviar para sempre.
+      if (!payment) return reply.code(202).send({ ok: true, ignored: true });
+      const view = await settlePayment(payment.id, request.log, { force: true, reconsiderTimeout: true });
+      return { ok: true, status: view?.state ?? "unknown" };
+    });
   });
 
   app.get("/payments/:id", { preHandler: requireAuth }, async (request, reply) => {

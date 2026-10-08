@@ -48,7 +48,7 @@ Backend base for Twisisa Market, using Fastify, TypeScript, Prisma Client and Ne
 
 - `POST /api/v1/orders/:id/payments/initiate` only works while the order is `PENDING_PAYMENT`, and only one active payment is allowed per order at a time.
 - `provider: "MANUAL"` requires `method: "MPESA"` or `"EMOLA"` with a matching Mozambican phone number (`84`/`85` for M-Pesa, `86`/`87` for e-Mola, with or without the `258` prefix), or `method: "CARD"` with no card number — card payment is handled offline (e.g. POS on delivery); this backend never receives or stores card numbers. The customer then submits proof via `POST /api/v1/payments/:id/proof`, and an admin approves/rejects it via `POST /api/v1/admin/payments/:id/review`.
-- `provider: "ZUMBOPAY"` calls the configured gateway; if it's down or `ZUMBOPAY_ENABLED=false`, switch the frontend to `provider: "MANUAL"` so customers can still pay.
+- `provider: "ZUMBOPAY"` runs the real flow described under "Payments flow" below. `provider: "MANUAL"` (proof upload + admin review) stays available as a fallback.
 
 ## Support chat
 
@@ -110,3 +110,24 @@ Expected response:
 - `JWT_SECRET` has no default: generate one (see `.env.example`). Placeholder values are rejected at startup.
 - Empty optional variables copied from `.env.example` are treated as unset.
 - The sample seed password is for local development only and must be changed before any real deployment.
+
+
+## Payments flow (ZumboPay)
+
+Checkout → `/pagamento/:orderId`: choose method (M-Pesa, e-Mola, Visa/Mastercard) → phone number → Pay → waiting screen → celebration **only after the server confirms the payment with ZumboPay**.
+
+- `GET  /api/v1/payments/methods` – methods that are really available (wallet configured) + sandbox flag.
+- `POST /api/v1/orders/:id/payments/initiate` – `{provider:"ZUMBOPAY", method:"MPESA"|"EMOLA", paymentNumber}` sends the STK push (`POST /charges`); `{method:"CARD"}` returns a hosted 3DS `checkoutUrl`. If the order already has an active payment the answer is `409 PAYMENT_ALREADY_ACTIVE` with its `paymentId`, which is how a pending payment is resumed.
+- `GET  /api/v1/payments/:id/status` – polled by the waiting screen every 3 s. Each call asks ZumboPay (`GET /payments/{reference}`) and returns `state: pending | success | failed` plus `failureKind` (`WRONG_PIN`, `INSUFFICIENT_FUNDS`, `CANCELLED`, `TIMEOUT`, `AMOUNT_MISMATCH`, `UNAVAILABLE`, `UNKNOWN`).
+- `POST /api/v1/payments/:id/cancel` – "change method"; never cancels a payment ZumboPay already confirmed.
+- `POST /api/v1/webhooks/zumbopay` – HMAC SHA-256 over `${X-Timestamp}.${raw body}` (5 min window) using `ZUMBOPAY_WEBHOOK_SECRET`. The webhook only *wakes up* the verification; the state always comes from `GET /payments/{reference}`.
+
+Rules enforced in `services/paymentFlow.ts` (single entry point `settlePayment`): amount and currency (MZN) must match the order, e-Mola needs proof of PIN (same rule as the official WooCommerce plugin), the order only becomes `PAID` in a conditional transaction (polling + webhook cannot double-process), the invoice is issued only after that, a network error never marks a payment as failed, and a late webhook after a timeout still pays the order.
+
+Setup: set `ZUMBOPAY_ENABLED=true`, `ZUMBOPAY_API_KEY`, `ZUMBOPAY_WEBHOOK_SECRET`, the wallet ids `ZUMBOPAY_WALLET_MPESA|EMOLA|CARD` (UUIDs from ZumboPay's `GET /wallets`) and register `<APP_PUBLIC_URL>/api/v1/webhooks/zumbopay` in the ZumboPay dashboard. For local demos use `ZUMBOPAY_MOCK=true` (refused in production): the last digit of the phone picks the outcome (0 wrong PIN, 1 insufficient funds, 2 cancelled, 3 expires, other success after ~7 s).
+
+## Invoice
+
+`InvoiceSettings` (admin → *Fatura*) holds company name, NUIT, address, contacts, logo, accent colour, signature image + signer, number prefix, VAT %, footer, terms and bank details. Invoice numbers are sequential (`FT-2026-000001`) from an atomic counter. Every invoice stores a **copy** of the issuer data (`Invoice.issuer`) when issued, so editing the settings never rewrites old invoices. `GET /api/v1/admin/invoice-settings/preview` renders a sample PDF with the saved settings.
+
+After pulling these changes run `npm run migrate` (migration `008`) and `npm run generate` (new Prisma models).
