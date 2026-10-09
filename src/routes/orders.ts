@@ -29,6 +29,25 @@ const cancellable = new Set<OrderStatus>([
 ]);
 
 // Estados que um admin pode atribuir manualmente e os estados a partir dos quais cada um é alcançável.
+// Acompanhamento visível ao cliente: onde está, quando chega, quem transporta.
+const trackingFields = {
+  location: z.string().trim().max(120).optional(),
+  estimatedDeliveryAt: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  trackingCode: z.string().trim().max(60).optional(),
+  carrier: z.string().trim().max(60).optional()
+};
+const trackingData = (b: { estimatedDeliveryAt?: string; trackingCode?: string; carrier?: string }) => ({
+  ...(b.estimatedDeliveryAt ? { estimatedDeliveryAt: new Date(`${b.estimatedDeliveryAt}T12:00:00Z`) } : {}),
+  ...(b.trackingCode ? { trackingCode: b.trackingCode } : {}),
+  ...(b.carrier ? { carrier: b.carrier } : {})
+});
+const STATUS_PT: Record<string, string> = {
+  PENDING_PAYMENT: "aguarda pagamento", PAYMENT_REVIEW: "pagamento em revisão", PAID: "paga", PROCESSING: "em processamento",
+  READY_FOR_SHIPMENT: "pronta para envio", SHIPPED: "enviada", OUT_FOR_DELIVERY: "em entrega", DELIVERED: "entregue",
+  CANCELLATION_REQUESTED: "cancelamento pedido", CANCELLED: "cancelada", REFUND_PENDING: "reembolso pendente", REFUNDED: "reembolsada"
+};
+const trackableStates: OrderStatus[] = [OrderStatus.PAID, OrderStatus.PROCESSING, OrderStatus.READY_FOR_SHIPMENT, OrderStatus.SHIPPED, OrderStatus.OUT_FOR_DELIVERY];
+
 const adminTransitions: Record<string, OrderStatus[]> = {
   [OrderStatus.PROCESSING]: [OrderStatus.PAID],
   [OrderStatus.READY_FOR_SHIPMENT]: [OrderStatus.PROCESSING],
@@ -575,6 +594,37 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
     }
   );
 
+  // Atualização de acompanhamento SEM mudar o estado ("chegou ao armazém de Nampula", nova data prevista...).
+  app.post("/admin/orders/:id/tracking", { preHandler: requireAuth }, async (request, reply) => {
+    if (!isAdmin(request.auth!.roles)) return reply.code(403).send({ error: "FORBIDDEN" });
+    const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
+    const body = z.object({ note: z.string().trim().max(500).optional(), ...trackingFields }).safeParse(request.body);
+    if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_INPUT" });
+    if (!body.data.location && !body.data.note && !body.data.estimatedDeliveryAt && !body.data.trackingCode && !body.data.carrier) {
+      return reply.code(400).send({ error: "EMPTY_TRACKING_UPDATE" });
+    }
+    const order = await prisma.order.findUnique({ where: { id: params.data.id } });
+    if (!order) return reply.code(404).send({ error: "ORDER_NOT_FOUND" });
+    if (!trackableStates.includes(order.status)) return reply.code(409).send({ error: "ORDER_NOT_TRACKABLE" });
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.orderStatusHistory.create({
+        data: { orderId: order.id, from: order.status, to: order.status, reason: body.data.note || undefined, location: body.data.location || undefined, actorId: request.auth!.userId }
+      });
+      return tx.order.update({ where: { id: order.id }, data: trackingData(body.data) });
+    });
+    try {
+      await audit({ actorId: request.auth!.userId, action: "ORDER_TRACKING_UPDATED", entity: "Order", entityId: order.id, metadata: { location: body.data.location, eta: body.data.estimatedDeliveryAt } });
+      await notifyUser({
+        userId: order.userId, type: "ORDER", title: "Novidades da sua encomenda",
+        message: `${order.orderNumber}${body.data.location ? `: ${body.data.location}` : ""}${body.data.estimatedDeliveryAt ? ` · chegada prevista ${body.data.estimatedDeliveryAt}` : ""}.`,
+        data: { orderId: order.id, status: order.status }
+      });
+    } catch (error) {
+      request.log.error(error, "order tracking side effects failed");
+    }
+    return updated;
+  });
+
   // Avança o estado da encomenda numa transição admitida;
   // devolve o stock quando a encomenda é reembolsada.
   app.post(
@@ -596,7 +646,8 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
       const body = z
         .object({
           status: z.nativeEnum(OrderStatus),
-          reason: z.string().trim().max(500).optional()
+          reason: z.string().trim().max(500).optional(),
+          ...trackingFields
         })
         .safeParse(request.body);
 
@@ -641,6 +692,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
             },
             data: {
               status: body.data.status,
+              ...trackingData(body.data),
               ...(body.data.status === OrderStatus.CANCELLED
                 ? {
                     cancelledAt: new Date(),
@@ -708,6 +760,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
               from: order.status,
               to: body.data.status,
               reason: body.data.reason,
+              location: body.data.location || undefined,
               actorId: request.auth!.userId
             }
           });
@@ -738,7 +791,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
             userId: result.userId,
             type: "ORDER",
             title: "Encomenda atualizada",
-            message: `A encomenda ${result.updated.orderNumber} está agora ${body.data.status}.`,
+            message: `A encomenda ${result.updated.orderNumber} está agora ${STATUS_PT[body.data.status] ?? body.data.status}${body.data.location ? ` · ${body.data.location}` : ""}.`,
             data: {
               orderId: result.updated.id,
               status: body.data.status

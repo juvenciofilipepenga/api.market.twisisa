@@ -130,4 +130,9 @@ Setup: set `ZUMBOPAY_ENABLED=true`, `ZUMBOPAY_API_KEY`, `ZUMBOPAY_WEBHOOK_SECRET
 
 `InvoiceSettings` (admin → *Fatura*) holds company name, NUIT, address, contacts, logo, accent colour, signature image + signer, number prefix, VAT %, footer, terms and bank details. Invoice numbers are sequential (`FT-2026-000001`) from an atomic counter. Every invoice stores a **copy** of the issuer data (`Invoice.issuer`) when issued, so editing the settings never rewrites old invoices. `GET /api/v1/admin/invoice-settings/preview` renders a sample PDF with the saved settings.
 
-After pulling these changes run `npm run migrate` (migration `008`) and `npm run generate` (new Prisma models).
+## Partial checkout and tracking
+
+- The cart lets the customer **select** which items to pay now. `POST /orders` receives only those; the cart is **not** emptied at that point. Paid items leave the cart only after the payment is confirmed (`PaymentPage`, or `CartReconciler` if the customer closed the page), and unselected items always stay. An unpaid order with exactly the same items is reused instead of duplicated.
+- Tracking for paid orders: `POST /admin/orders/:id/tracking` (location, note, estimated arrival date, carrier, tracking code) adds a history entry without changing the status and notifies the customer. `POST /admin/orders/:id/status` accepts the same optional fields. The customer sees them in the order page (*Acompanhamento* card + history).
+
+After pulling these changes run `npm run migrate` (migrations `008` and `009`) and `npm run generate` (new Prisma models and columns).

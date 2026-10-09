@@ -49,7 +49,8 @@ describe("payment endpoints require authentication", () => {
     ["POST", "/api/v1/orders/abc/payments/initiate"],
     ["GET", "/api/v1/admin/invoice-settings"],
     ["PUT", "/api/v1/admin/invoice-settings"],
-    ["GET", "/api/v1/admin/invoice-settings/preview"]
+    ["GET", "/api/v1/admin/invoice-settings/preview"],
+    ["POST", "/api/v1/admin/orders/abc/tracking"]
   ])("%s %s → 401", async (method, url) => {
     const app = buildApp();
     const res = await app.inject({ method: method as "GET" | "POST" | "PUT", url });
