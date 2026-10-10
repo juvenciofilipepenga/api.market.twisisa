@@ -2,7 +2,8 @@ import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { classifyFailure, uiState } from "../src/services/paymentFlow.js";
-import { normalizeState, pinConfirmed } from "../src/services/zumbopay.js";
+import { isProviderFailure, manualDetails, onlineStatus } from "../src/services/paymentSettings.js";
+import { normalizeState, pinConfirmed, ZumboPayError } from "../src/services/zumbopay.js";
 
 const SECRET = "test-webhook-secret";
 const sign = (ts: string, raw: string) => createHmac("sha256", SECRET).update(`${ts}.${raw}`).digest("hex");
@@ -50,7 +51,13 @@ describe("payment endpoints require authentication", () => {
     ["GET", "/api/v1/admin/invoice-settings"],
     ["PUT", "/api/v1/admin/invoice-settings"],
     ["GET", "/api/v1/admin/invoice-settings/preview"],
-    ["POST", "/api/v1/admin/orders/abc/tracking"]
+    ["POST", "/api/v1/admin/orders/abc/tracking"],
+    ["GET", "/api/v1/admin/payment-settings"],
+    ["PUT", "/api/v1/admin/payment-settings"],
+    ["POST", "/api/v1/admin/payment-settings/reset-degraded"],
+    ["POST", "/api/v1/payments/abc/proof"],
+    ["POST", "/api/v1/payments/abc/claim"],
+    ["GET", "/api/v1/admin/payments/pending-review"]
   ])("%s %s → 401", async (method, url) => {
     const app = buildApp();
     const res = await app.inject({ method: method as "GET" | "POST" | "PUT", url });
@@ -93,5 +100,32 @@ describe("ZumboPay status mapping", () => {
     expect(uiState("PAYMENT_CONFIRMED")).toBe("success");
     for (const s of ["INITIATED", "AUTHENTICATING", "PENDING_CONFIRMATION", "PROOF_SUBMITTED"] as const) expect(uiState(s)).toBe("pending");
     for (const s of ["FAILED", "TIMEOUT", "CANCELLED", "PAYMENT_REJECTED"] as const) expect(uiState(s)).toBe("failed");
+  });
+});
+
+describe("fallback rules (ZumboPay down → manual payment)", () => {
+  it("counts only provider-side problems as ZumboPay failures", () => {
+    expect(isProviderFailure(new ZumboPayError("NETWORK", "x"))).toBe(true);
+    expect(isProviderFailure(new ZumboPayError("BAD_RESPONSE", "x", 502))).toBe(true);
+    expect(isProviderFailure(new ZumboPayError("NOT_CONFIGURED", "x"))).toBe(true);
+    for (const status of [401, 403, 429, 500, 503]) expect(isProviderFailure(new ZumboPayError("REJECTED", "x", status))).toBe(true);
+    // número inválido / pedido mal formado = culpa do cliente, não abre o disjuntor
+    expect(isProviderFailure(new ZumboPayError("REJECTED", "invalid phone", 422))).toBe(false);
+    expect(isProviderFailure(new Error("boom"))).toBe(false);
+  });
+
+  it("online status: switched off, tripped breaker, or fine", () => {
+    const base = { onlineEnabled: true, zpDegradedUntil: null } as never;
+    expect(onlineStatus(base)).toBe("ok");
+    expect(onlineStatus({ onlineEnabled: false, zpDegradedUntil: null } as never)).toBe("disabled");
+    expect(onlineStatus({ onlineEnabled: true, zpDegradedUntil: new Date(Date.now() + 60_000) } as never)).toBe("degraded");
+    expect(onlineStatus({ onlineEnabled: true, zpDegradedUntil: new Date(Date.now() - 60_000) } as never)).toBe("ok");
+  });
+
+  it("manual payment only shows when at least one destination is filled in", () => {
+    const empty = { manualEnabled: true, mpesaNumber: null, emolaNumber: null, bankNib: null } as never;
+    expect(manualDetails(empty).enabled).toBe(false);
+    expect(manualDetails({ manualEnabled: true, mpesaNumber: "841234567", mpesaName: "Loja", emolaNumber: null, bankNib: null } as never).enabled).toBe(true);
+    expect(manualDetails({ manualEnabled: false, mpesaNumber: "841234567", emolaNumber: null, bankNib: null } as never).enabled).toBe(false);
   });
 });

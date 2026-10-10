@@ -33,6 +33,8 @@ const schema = z
     ZUMBOPAY_WALLET_CARD: z.string().min(1).optional(),
     // Segundos que o cliente tem para confirmar o PIN no telemóvel antes de o pagamento expirar.
     PAYMENT_CONFIRM_WINDOW_SECONDS: z.coerce.number().int().min(60).max(900).default(180),
+    // Pagamento manual: tempo (s) que o cliente tem para pagar a partir de "Enviar pedido". Passado isto, o pedido expira sozinho.
+    MANUAL_PAYMENT_WINDOW_SECONDS: z.coerce.number().int().min(60).max(1800).default(300),
     // Simulador de pagamentos para desenvolvimento/demonstração (nunca em produção).
     ZUMBOPAY_MOCK: z.string().optional().transform((v) => v === "true"),
     // URL pública do frontend (para onde o cartão regressa após o 3DS). Por omissão, a primeira origem CORS.

@@ -261,6 +261,8 @@ model Payment {
   authenticatedAt DateTime?
   confirmedAt DateTime?
   expiresAt DateTime?
+  payerName String?
+  paidClaimedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -411,5 +413,23 @@ model InvoiceSettings {
   bankDetails String?
   vatRatePercent Decimal @default(0) @db.Decimal(5, 2)
   showSignature Boolean @default(true)
+  updatedAt DateTime @updatedAt
+}
+
+model PaymentSettings {
+  id String @id @default("main")
+  onlineEnabled Boolean @default(true)
+  manualEnabled Boolean @default(true)
+  mpesaNumber String?
+  mpesaName String?
+  emolaNumber String?
+  emolaName String?
+  bankName String?
+  bankNib String?
+  bankHolder String?
+  instructions String?
+  zpFailures Int @default(0)
+  zpFailureAt DateTime?
+  zpDegradedUntil DateTime?
   updatedAt DateTime @updatedAt
 }

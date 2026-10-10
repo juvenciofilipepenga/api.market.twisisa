@@ -11,8 +11,12 @@ import { getPayment, type ZpPayment } from "./zumbopay.js";
 // é lido do ZumboPay (GET /payments/{ref}), nunca do que o cliente ou o webhook afirmam. Assim não há celebração
 // antes de o dinheiro estar confirmado, e o valor/moeda são sempre cruzados com a encomenda.
 
-export type FailureKind = "WRONG_PIN" | "INSUFFICIENT_FUNDS" | "CANCELLED" | "TIMEOUT" | "AMOUNT_MISMATCH" | "UNAVAILABLE" | "UNKNOWN";
+export type FailureKind = "MANUAL_EXPIRED" | "PROOF_REJECTED" | "WRONG_PIN" | "INSUFFICIENT_FUNDS" | "CANCELLED" | "TIMEOUT" | "AMOUNT_MISMATCH" | "UNAVAILABLE" | "UNKNOWN";
 export type PaymentUiState = "pending" | "success" | "failed";
+
+// Depois de o prazo acabar, o cliente que JÁ pagou ainda pode carregar em "Já paguei" durante este tempo
+// (pagou no último minuto e o relógio venceu antes do clique: o dinheiro é dele, não o perdemos).
+export const MANUAL_CLAIM_GRACE_MS = 30 * 60_000;
 
 export const finalSuccess: PaymentStatus[] = [PaymentStatus.SUCCESS, PaymentStatus.PAYMENT_CONFIRMED];
 const failedStates: PaymentStatus[] = [PaymentStatus.FAILED, PaymentStatus.TIMEOUT, PaymentStatus.CANCELLED, PaymentStatus.PAYMENT_REJECTED];
@@ -30,6 +34,15 @@ export function classifyFailure(code?: string | null, description?: string | nul
 export type PaymentView = {
   id: string;
   orderId: string;
+  provider: string;
+  reference: string;
+  /** Nota do admin ao rejeitar um comprovativo (para o cliente ler). */
+  note: string | null;
+  payerName: string | null;
+  /** Quando o cliente carregou em "Já paguei" (pagamento manual). */
+  claimedAt: string | null;
+  /** Até quando ainda pode carregar em "Já paguei", mesmo depois de o prazo acabar (pagamento manual). */
+  claimUntil: string | null;
   method: string | null;
   amountMzn: string;
   paymentNumber: string | null;
@@ -56,12 +69,18 @@ export async function toView(payment: PaymentRow): Promise<PaymentView> {
   return {
     id: payment.id,
     orderId: payment.orderId,
+    provider: payment.provider,
+    reference: payment.reference,
+    note: payment.status === PaymentStatus.PAYMENT_REJECTED && payment.failureMessage && payment.failureMessage !== "Rejected by admin" ? payment.failureMessage : null,
+    payerName: payment.payerName,
+    claimedAt: payment.paidClaimedAt?.toISOString() ?? null,
+    claimUntil: payment.provider === "MANUAL" && payment.expiresAt ? new Date(payment.expiresAt.getTime() + MANUAL_CLAIM_GRACE_MS).toISOString() : null,
     method: payment.method,
     amountMzn: payment.amountMzn.toString(),
     paymentNumber: payment.paymentNumber,
     state,
     status: payment.status,
-    failureKind: state === "failed" ? ((payment.failureCode as FailureKind | null) ?? "UNKNOWN") : null,
+    failureKind: state === "failed" ? (payment.status === PaymentStatus.PAYMENT_REJECTED ? "PROOF_REJECTED" : payment.provider === "MANUAL" && payment.status === PaymentStatus.TIMEOUT ? "MANUAL_EXPIRED" : ((payment.failureCode as FailureKind | null) ?? "UNKNOWN")) : null,
     expiresAt: payment.expiresAt?.toISOString() ?? null,
     confirmedAt: payment.confirmedAt?.toISOString() ?? null,
     invoiceId: invoice?.id ?? null
@@ -81,6 +100,15 @@ export async function settlePayment(paymentId: string, log: Logger = console, op
   if (!current) return null;
   const pendingNow = uiState(current.status) === "pending";
   if (!pendingNow && !(opts.reconsiderTimeout && current.status === PaymentStatus.TIMEOUT)) return toView(current);
+  if (current.provider === "MANUAL") {
+    // Pedido manual que ninguém reclamou a tempo: expira sozinho e nunca chega ao admin.
+    const awaitingPayment = current.status === PaymentStatus.INITIATED || current.status === PaymentStatus.PENDING_CONFIRMATION;
+    if (awaitingPayment && current.expiresAt && current.expiresAt.getTime() < Date.now()) {
+      await prisma.payment.updateMany({ where: { id: current.id, status: { in: [PaymentStatus.INITIATED, PaymentStatus.PENDING_CONFIRMATION] } }, data: { status: PaymentStatus.TIMEOUT, failureCode: "TIMEOUT", failureMessage: "Manual payment window expired" } });
+      return toView((await prisma.payment.findUnique({ where: { id: current.id } })) ?? current);
+    }
+    return toView(current);
+  }
   if (current.provider !== "ZUMBOPAY" || !current.providerPaymentId) return toView(current);
 
   const now = Date.now();
