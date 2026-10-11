@@ -68,7 +68,9 @@ export const ModelName = {
   ChatMessage: 'ChatMessage',
   ChatAttachment: 'ChatAttachment',
   AuditLog: 'AuditLog',
-  Review: 'Review'
+  Review: 'Review',
+  InvoiceSettings: 'InvoiceSettings',
+  PaymentSettings: 'PaymentSettings'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -197,6 +199,9 @@ export const OrderScalarFieldEnum = {
   cancellationReason: 'cancellationReason',
   cancelledAt: 'cancelledAt',
   cancelledById: 'cancelledById',
+  estimatedDeliveryAt: 'estimatedDeliveryAt',
+  trackingCode: 'trackingCode',
+  carrier: 'carrier',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const
@@ -226,6 +231,7 @@ export const OrderStatusHistoryScalarFieldEnum = {
   from: 'from',
   to: 'to',
   reason: 'reason',
+  location: 'location',
   actorId: 'actorId',
   createdAt: 'createdAt'
 } as const
@@ -249,6 +255,9 @@ export const PaymentScalarFieldEnum = {
   failureMessage: 'failureMessage',
   authenticatedAt: 'authenticatedAt',
   confirmedAt: 'confirmedAt',
+  expiresAt: 'expiresAt',
+  payerName: 'payerName',
+  paidClaimedAt: 'paidClaimedAt',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const
@@ -271,6 +280,7 @@ export const InvoiceScalarFieldEnum = {
   paymentMethod: 'paymentMethod',
   paymentReference: 'paymentReference',
   pdfUrl: 'pdfUrl',
+  issuer: 'issuer',
   issuedAt: 'issuedAt',
   createdAt: 'createdAt'
 } as const
@@ -371,6 +381,55 @@ export const ReviewScalarFieldEnum = {
 } as const
 
 export type ReviewScalarFieldEnum = (typeof ReviewScalarFieldEnum)[keyof typeof ReviewScalarFieldEnum]
+
+
+export const InvoiceSettingsScalarFieldEnum = {
+  id: 'id',
+  companyName: 'companyName',
+  legalName: 'legalName',
+  nuit: 'nuit',
+  address: 'address',
+  city: 'city',
+  phone: 'phone',
+  email: 'email',
+  website: 'website',
+  logoUrl: 'logoUrl',
+  signatureUrl: 'signatureUrl',
+  signerName: 'signerName',
+  signerRole: 'signerRole',
+  accentColor: 'accentColor',
+  numberPrefix: 'numberPrefix',
+  nextNumber: 'nextNumber',
+  footerNote: 'footerNote',
+  terms: 'terms',
+  bankDetails: 'bankDetails',
+  vatRatePercent: 'vatRatePercent',
+  showSignature: 'showSignature',
+  updatedAt: 'updatedAt'
+} as const
+
+export type InvoiceSettingsScalarFieldEnum = (typeof InvoiceSettingsScalarFieldEnum)[keyof typeof InvoiceSettingsScalarFieldEnum]
+
+
+export const PaymentSettingsScalarFieldEnum = {
+  id: 'id',
+  onlineEnabled: 'onlineEnabled',
+  manualEnabled: 'manualEnabled',
+  mpesaNumber: 'mpesaNumber',
+  mpesaName: 'mpesaName',
+  emolaNumber: 'emolaNumber',
+  emolaName: 'emolaName',
+  bankName: 'bankName',
+  bankNib: 'bankNib',
+  bankHolder: 'bankHolder',
+  instructions: 'instructions',
+  zpFailures: 'zpFailures',
+  zpFailureAt: 'zpFailureAt',
+  zpDegradedUntil: 'zpDegradedUntil',
+  updatedAt: 'updatedAt'
+} as const
+
+export type PaymentSettingsScalarFieldEnum = (typeof PaymentSettingsScalarFieldEnum)[keyof typeof PaymentSettingsScalarFieldEnum]
 
 
 export const SortOrder = {

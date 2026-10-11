@@ -3,6 +3,8 @@ import { OrderStatus, Prisma } from "../generated/prisma/client.js";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
+import { CatalogError, resolveOrderLine } from "../services/catalog.js";
+import { ORDER_BUCKETS } from "../services/orderBuckets.js";
 import { randomReference } from "../lib/auth.js";
 import { requireAuth, isAdmin } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
@@ -155,6 +157,8 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
           variantId?: string;
           variantColorHex?: string;
           variantSize?: string;
+          variantLabel?: string;
+          sku?: string;
           productName: string;
           unitPriceMzn: Prisma.Decimal;
           quantity: number;
@@ -164,25 +168,17 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
         for (const requested of requestedItems) {
           const product = productMap.get(requested.productId)!;
 
-          const variant = requested.variantId
-            ? product.variants.find(
-                (candidate) => candidate.id === requested.variantId
-              )
-            : undefined;
-
-          if (product.variants.length > 0 && !variant) {
-            throw new Error("VARIANT_REQUIRED");
+          // O servidor decide o preço (o da variante, ou o do produto) e a disponibilidade: nada vem do frontend.
+          let resolved;
+          try {
+            resolved = resolveOrderLine(product, requested);
+          } catch (error) {
+            if (error instanceof CatalogError) throw new Error(error.code);
+            throw error;
           }
+          const { variant, unitPrice } = resolved;
 
-          const availableStock = variant
-            ? variant.stock
-            : product.stock;
-
-          if (availableStock < requested.quantity) {
-            throw new Error("INSUFFICIENT_STOCK");
-          }
-
-          const line = product.priceMzn.mul(requested.quantity);
+          const line = unitPrice.mul(requested.quantity);
           subtotal = subtotal.add(line);
 
           items.push({
@@ -190,8 +186,10 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
             variantId: variant?.id,
             variantColorHex: variant?.colorHex ?? undefined,
             variantSize: variant?.size ?? undefined,
+            variantLabel: resolved.label ?? undefined,
+            sku: resolved.sku ?? undefined,
             productName: product.name,
-            unitPriceMzn: product.priceMzn,
+            unitPriceMzn: unitPrice,
             quantity: requested.quantity,
             subtotalMzn: line
           });
@@ -215,17 +213,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
             if (changed.count === 0) {
               throw new Error("INSUFFICIENT_STOCK");
             }
-
-            await tx.product.update({
-              where: {
-                id: product.id
-              },
-              data: {
-                stock: {
-                  decrement: requested.quantity
-                }
-              }
-            });
+            // Com variantes o stock vive só nelas: o do produto calcula-se a partir delas (sem valores duplicados).
           } else {
             const changed = await tx.product.updateMany({
               where: {
@@ -330,6 +318,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
       const map: Record<string, number> = {
         PRODUCT_NOT_FOUND: 404,
         VARIANT_REQUIRED: 400,
+        VARIANT_NOT_FOUND: 400,
         INSUFFICIENT_STOCK: 409,
         INVALID_TOTAL: 400
       };
@@ -487,17 +476,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
                   }
                 }
               });
-
-              await tx.product.update({
-                where: {
-                  id: item.productId
-                },
-                data: {
-                  stock: {
-                    increment: item.quantity
-                  }
-                }
-              });
+              // O stock do produto com variantes é calculado a partir delas: não se repõe em duplicado.
             } else {
               await tx.product.update({
                 where: {
@@ -728,17 +707,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
                     }
                   }
                 });
-
-                await tx.product.update({
-                  where: {
-                    id: item.productId
-                  },
-                  data: {
-                    stock: {
-                      increment: item.quantity
-                    }
-                  }
-                });
+              // O stock do produto com variantes é calculado a partir delas: não se repõe em duplicado.
               } else {
                 await tx.product.update({
                   where: {
@@ -839,23 +808,32 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
       const q = z
         .object({
           status: z.nativeEnum(OrderStatus).optional(),
+          // 3 separadores em vez de 12 estados: action | ongoing | done.
+          bucket: z.enum(["action", "ongoing", "done"]).optional(),
+          q: z.string().trim().max(80).optional(),
           page: z.coerce.number().int().min(1).default(1),
           limit: z.coerce.number().int().min(1).max(100).default(20)
         })
         .parse(request.query);
 
-      const where = q.status
-        ? { status: q.status }
-        : {};
+      const where: Prisma.OrderWhereInput = {
+        ...(q.status ? { status: q.status } : q.bucket ? { status: { in: [...ORDER_BUCKETS[q.bucket]] } } : {}),
+        ...(q.q
+          ? { OR: [
+              { orderNumber: { contains: q.q, mode: "insensitive" } },
+              { user: { name: { contains: q.q, mode: "insensitive" } } },
+              { user: { email: { contains: q.q, mode: "insensitive" } } }
+            ] }
+          : {})
+      };
 
       const [data, total] = await Promise.all([
         prisma.order.findMany({
           where,
           skip: (q.page - 1) * q.limit,
           take: q.limit,
-          orderBy: {
-            createdAt: "desc"
-          },
+          // O que espera pelo admin: o que está há mais tempo à espera primeiro. O resto: o mais recente primeiro.
+          orderBy: q.bucket === "action" ? { updatedAt: "asc" } : { createdAt: "desc" },
           include: {
             user: {
               select: {

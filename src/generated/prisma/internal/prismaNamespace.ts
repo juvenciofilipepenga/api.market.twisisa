@@ -409,7 +409,9 @@ export const ModelName = {
   ChatMessage: 'ChatMessage',
   ChatAttachment: 'ChatAttachment',
   AuditLog: 'AuditLog',
-  Review: 'Review'
+  Review: 'Review',
+  InvoiceSettings: 'InvoiceSettings',
+  PaymentSettings: 'PaymentSettings'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -425,7 +427,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "user" | "role" | "userRole" | "session" | "category" | "product" | "productVariant" | "productImage" | "order" | "orderItem" | "orderStatusHistory" | "payment" | "invoice" | "address" | "notification" | "conversation" | "chatMessage" | "chatAttachment" | "auditLog" | "review"
+    modelProps: "user" | "role" | "userRole" | "session" | "category" | "product" | "productVariant" | "productImage" | "order" | "orderItem" | "orderStatusHistory" | "payment" | "invoice" | "address" | "notification" | "conversation" | "chatMessage" | "chatAttachment" | "auditLog" | "review" | "invoiceSettings" | "paymentSettings"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -1909,6 +1911,154 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    InvoiceSettings: {
+      payload: Prisma.$InvoiceSettingsPayload<ExtArgs>
+      fields: Prisma.InvoiceSettingsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.InvoiceSettingsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InvoiceSettingsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.InvoiceSettingsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InvoiceSettingsPayload>
+        }
+        findFirst: {
+          args: Prisma.InvoiceSettingsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InvoiceSettingsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.InvoiceSettingsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InvoiceSettingsPayload>
+        }
+        findMany: {
+          args: Prisma.InvoiceSettingsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InvoiceSettingsPayload>[]
+        }
+        create: {
+          args: Prisma.InvoiceSettingsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InvoiceSettingsPayload>
+        }
+        createMany: {
+          args: Prisma.InvoiceSettingsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.InvoiceSettingsCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InvoiceSettingsPayload>[]
+        }
+        delete: {
+          args: Prisma.InvoiceSettingsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InvoiceSettingsPayload>
+        }
+        update: {
+          args: Prisma.InvoiceSettingsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InvoiceSettingsPayload>
+        }
+        deleteMany: {
+          args: Prisma.InvoiceSettingsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.InvoiceSettingsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.InvoiceSettingsUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InvoiceSettingsPayload>[]
+        }
+        upsert: {
+          args: Prisma.InvoiceSettingsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$InvoiceSettingsPayload>
+        }
+        aggregate: {
+          args: Prisma.InvoiceSettingsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateInvoiceSettings>
+        }
+        groupBy: {
+          args: Prisma.InvoiceSettingsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.InvoiceSettingsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.InvoiceSettingsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.InvoiceSettingsCountAggregateOutputType> | number
+        }
+      }
+    }
+    PaymentSettings: {
+      payload: Prisma.$PaymentSettingsPayload<ExtArgs>
+      fields: Prisma.PaymentSettingsFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.PaymentSettingsFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PaymentSettingsPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.PaymentSettingsFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PaymentSettingsPayload>
+        }
+        findFirst: {
+          args: Prisma.PaymentSettingsFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PaymentSettingsPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.PaymentSettingsFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PaymentSettingsPayload>
+        }
+        findMany: {
+          args: Prisma.PaymentSettingsFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PaymentSettingsPayload>[]
+        }
+        create: {
+          args: Prisma.PaymentSettingsCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PaymentSettingsPayload>
+        }
+        createMany: {
+          args: Prisma.PaymentSettingsCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.PaymentSettingsCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PaymentSettingsPayload>[]
+        }
+        delete: {
+          args: Prisma.PaymentSettingsDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PaymentSettingsPayload>
+        }
+        update: {
+          args: Prisma.PaymentSettingsUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PaymentSettingsPayload>
+        }
+        deleteMany: {
+          args: Prisma.PaymentSettingsDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.PaymentSettingsUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.PaymentSettingsUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PaymentSettingsPayload>[]
+        }
+        upsert: {
+          args: Prisma.PaymentSettingsUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PaymentSettingsPayload>
+        }
+        aggregate: {
+          args: Prisma.PaymentSettingsAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregatePaymentSettings>
+        }
+        groupBy: {
+          args: Prisma.PaymentSettingsGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.PaymentSettingsGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.PaymentSettingsCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.PaymentSettingsCountAggregateOutputType> | number
+        }
+      }
+    }
   }
 } & {
   other: {
@@ -2058,6 +2208,9 @@ export const OrderScalarFieldEnum = {
   cancellationReason: 'cancellationReason',
   cancelledAt: 'cancelledAt',
   cancelledById: 'cancelledById',
+  estimatedDeliveryAt: 'estimatedDeliveryAt',
+  trackingCode: 'trackingCode',
+  carrier: 'carrier',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const
@@ -2087,6 +2240,7 @@ export const OrderStatusHistoryScalarFieldEnum = {
   from: 'from',
   to: 'to',
   reason: 'reason',
+  location: 'location',
   actorId: 'actorId',
   createdAt: 'createdAt'
 } as const
@@ -2110,6 +2264,9 @@ export const PaymentScalarFieldEnum = {
   failureMessage: 'failureMessage',
   authenticatedAt: 'authenticatedAt',
   confirmedAt: 'confirmedAt',
+  expiresAt: 'expiresAt',
+  payerName: 'payerName',
+  paidClaimedAt: 'paidClaimedAt',
   createdAt: 'createdAt',
   updatedAt: 'updatedAt'
 } as const
@@ -2132,6 +2289,7 @@ export const InvoiceScalarFieldEnum = {
   paymentMethod: 'paymentMethod',
   paymentReference: 'paymentReference',
   pdfUrl: 'pdfUrl',
+  issuer: 'issuer',
   issuedAt: 'issuedAt',
   createdAt: 'createdAt'
 } as const
@@ -2232,6 +2390,55 @@ export const ReviewScalarFieldEnum = {
 } as const
 
 export type ReviewScalarFieldEnum = (typeof ReviewScalarFieldEnum)[keyof typeof ReviewScalarFieldEnum]
+
+
+export const InvoiceSettingsScalarFieldEnum = {
+  id: 'id',
+  companyName: 'companyName',
+  legalName: 'legalName',
+  nuit: 'nuit',
+  address: 'address',
+  city: 'city',
+  phone: 'phone',
+  email: 'email',
+  website: 'website',
+  logoUrl: 'logoUrl',
+  signatureUrl: 'signatureUrl',
+  signerName: 'signerName',
+  signerRole: 'signerRole',
+  accentColor: 'accentColor',
+  numberPrefix: 'numberPrefix',
+  nextNumber: 'nextNumber',
+  footerNote: 'footerNote',
+  terms: 'terms',
+  bankDetails: 'bankDetails',
+  vatRatePercent: 'vatRatePercent',
+  showSignature: 'showSignature',
+  updatedAt: 'updatedAt'
+} as const
+
+export type InvoiceSettingsScalarFieldEnum = (typeof InvoiceSettingsScalarFieldEnum)[keyof typeof InvoiceSettingsScalarFieldEnum]
+
+
+export const PaymentSettingsScalarFieldEnum = {
+  id: 'id',
+  onlineEnabled: 'onlineEnabled',
+  manualEnabled: 'manualEnabled',
+  mpesaNumber: 'mpesaNumber',
+  mpesaName: 'mpesaName',
+  emolaNumber: 'emolaNumber',
+  emolaName: 'emolaName',
+  bankName: 'bankName',
+  bankNib: 'bankNib',
+  bankHolder: 'bankHolder',
+  instructions: 'instructions',
+  zpFailures: 'zpFailures',
+  zpFailureAt: 'zpFailureAt',
+  zpDegradedUntil: 'zpDegradedUntil',
+  updatedAt: 'updatedAt'
+} as const
+
+export type PaymentSettingsScalarFieldEnum = (typeof PaymentSettingsScalarFieldEnum)[keyof typeof PaymentSettingsScalarFieldEnum]
 
 
 export const SortOrder = {
@@ -2401,20 +2608,6 @@ export type ListEnumPaymentStatusFieldRefInput<$PrismaModel> = FieldRefInputType
 
 
 /**
- * Reference to a field of type 'NotificationType'
- */
-export type EnumNotificationTypeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'NotificationType'>
-    
-
-
-/**
- * Reference to a field of type 'NotificationType[]'
- */
-export type ListEnumNotificationTypeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'NotificationType[]'>
-    
-
-
-/**
  * Reference to a field of type 'Json'
  */
 export type JsonFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Json'>
@@ -2425,6 +2618,20 @@ export type JsonFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'J
  * Reference to a field of type 'QueryMode'
  */
 export type EnumQueryModeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'QueryMode'>
+    
+
+
+/**
+ * Reference to a field of type 'NotificationType'
+ */
+export type EnumNotificationTypeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'NotificationType'>
+    
+
+
+/**
+ * Reference to a field of type 'NotificationType[]'
+ */
+export type ListEnumNotificationTypeFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'NotificationType[]'>
     
 
 
@@ -2576,6 +2783,8 @@ export type GlobalOmitConfig = {
   chatAttachment?: Prisma.ChatAttachmentOmit
   auditLog?: Prisma.AuditLogOmit
   review?: Prisma.ReviewOmit
+  invoiceSettings?: Prisma.InvoiceSettingsOmit
+  paymentSettings?: Prisma.PaymentSettingsOmit
 }
 
 /* Types for Logging */

@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
 import { deleteCloudinaryAsset } from "../services/cloudinary.js";
+import { availableStock, CatalogError, describeOptions, normalizeVariants, optionsFromLegacy, parseAttributeValue, type NormalizedVariant, type VariantOptions } from "../services/catalog.js";
 
 function slugify(value: string): string {
   return value.trim().toLowerCase()
@@ -14,11 +15,21 @@ function slugify(value: string): string {
 
 const adminOnly = [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)];
 
+// Aceita o formato novo (options: {"Cor":"#000","Tamanho":"M"}) e o antigo (colorHex/size), para não partir o que já existe.
 const variantSchema = z.object({
-  colorHex: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
-  size: z.string().trim().min(1).max(30).optional(),
+  colorHex: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullish(),
+  size: z.string().trim().min(1).max(30).nullish(),
+  options: z.record(z.string().trim().min(1).max(30), z.string().trim().min(1).max(60)).optional(),
+  sku: z.string().trim().max(60).nullish(),
+  // Vazio = herda o preço do produto.
+  priceMzn: z.number().positive().max(10_000_000).nullish(),
   stock: z.number().int().min(0).max(1_000_000),
   active: z.boolean().default(true)
+});
+
+const attributeInputSchema = z.object({
+  attributeId: z.string().min(1),
+  value: z.union([z.string().max(300), z.number(), z.boolean(), z.null()])
 });
 
 // Base SEM defaults: serve de ponto de partida tanto para criar (com defaults) como para editar (parcial).
@@ -29,7 +40,8 @@ const productBaseSchema = z.object({
   stock: z.number().int().min(0).max(1_000_000),
   categoryId: z.string().min(1).optional(),
   active: z.boolean(),
-  variants: z.array(variantSchema).max(200).optional()
+  variants: z.array(variantSchema).max(200).optional(),
+  attributes: z.array(attributeInputSchema).max(80).optional()
 });
 
 const productWriteSchema = productBaseSchema.extend({
@@ -44,20 +56,98 @@ const productPatchSchema = productBaseSchema.partial().extend({
   categoryId: z.string().min(1).nullable().optional()
 });
 
-const KNOWN_PRODUCT_ERRORS = new Set(["DUPLICATE_VARIANT", "VARIANT_ATTRIBUTE_REQUIRED", "INVALID_NAME"]);
+const CATALOG_INPUT_ERRORS = new Set(["DUPLICATE_VARIANT", "VARIANT_ATTRIBUTE_REQUIRED", "DUPLICATE_SKU", "TOO_MANY_OPTIONS", "ATTRIBUTE_REQUIRED", "ATTRIBUTE_INVALID_VALUE", "ATTRIBUTE_NOT_IN_CATEGORY"]);
+const KNOWN_PRODUCT_ERRORS = new Set([...CATALOG_INPUT_ERRORS, "INVALID_NAME"]);
 
-function variantTotal(variants: Array<{ stock: number }>): number {
-  return variants.reduce((sum, variant) => sum + variant.stock, 0);
+// Variantes: SÓ as ativas nas listas públicas e no detalhe; o admin recebe todas na resposta de gravação.
+const PRODUCT_INCLUDE = { category: true, images: { orderBy: { sortOrder: "asc" as const } }, variants: { where: { active: true }, orderBy: { createdAt: "asc" as const } }, attributeValues: { include: { attribute: true } } };
+const ADMIN_WRITE_INCLUDE = { category: true, images: { orderBy: { sortOrder: "asc" as const } }, variants: { orderBy: { createdAt: "asc" as const } }, attributeValues: { include: { attribute: true } } };
+
+type AttributeInput = z.infer<typeof attributeInputSchema>;
+
+interface PresentableProduct {
+  priceMzn: Prisma.Decimal;
+  stock: number;
+  variants: Array<{ stock: number; active: boolean; priceMzn: Prisma.Decimal | null; options: Prisma.JsonValue; colorHex: string | null; size: string | null }>;
+  attributeValues: Array<{
+    valueText: string | null; valueNumber: Prisma.Decimal | null; valueBool: boolean | null;
+    attribute: { id: string; key: string; name: string; type: string; unit: string | null; options: Prisma.JsonValue; required: boolean; showPublic: boolean; filterable: boolean; sortOrder: number };
+  }>;
 }
 
-function validateVariants(variants: Array<{ colorHex?: string; size?: string; stock: number; active?: boolean }>) {
-  const keys = new Set<string>();
-  for (const variant of variants) {
-    if (!variant.colorHex && !variant.size) throw new Error("VARIANT_ATTRIBUTE_REQUIRED");
-    const key = `${variant.colorHex ?? ""}|${variant.size ?? ""}`;
-    if (keys.has(key)) throw new Error("DUPLICATE_VARIANT");
-    keys.add(key);
+// Uma só forma de apresentar um produto. Calcula o que NÃO se guarda duplicado:
+//  - stock: soma das variantes ativas (ou o do produto, se não tem variantes);
+//  - effectivePriceMzn por variante: o da variante ou, se vazio, o do produto;
+//  - optionDefs: as opções que o cliente pode escolher, deduzidas das variantes reais.
+function present<P extends PresentableProduct>(product: P, publicOnly: boolean) {
+  const { attributeValues, ...rest } = product;
+  const variants = product.variants.map((variant) => {
+    const raw = variant.options && typeof variant.options === "object" && !Array.isArray(variant.options) ? (variant.options as VariantOptions) : {};
+    const options = Object.keys(raw).length ? raw : optionsFromLegacy(variant.colorHex, variant.size);
+    return { ...variant, options, effectivePriceMzn: variant.priceMzn ?? product.priceMzn };
+  });
+  const active = variants.filter((variant) => variant.active);
+  const priceFromMzn = active.reduce((min, variant) => (Number(variant.effectivePriceMzn) < Number(min) ? variant.effectivePriceMzn : min), product.priceMzn);
+  const attributes = attributeValues
+    .filter((row) => !publicOnly || row.attribute.showPublic)
+    .sort((a, b) => a.attribute.sortOrder - b.attribute.sortOrder || a.attribute.name.localeCompare(b.attribute.name))
+    .map((row) => ({
+      id: row.attribute.id, key: row.attribute.key, name: row.attribute.name, type: row.attribute.type, unit: row.attribute.unit,
+      options: row.attribute.options, required: row.attribute.required, showPublic: row.attribute.showPublic, filterable: row.attribute.filterable,
+      value: row.valueText ?? (row.valueNumber !== null ? Number(row.valueNumber) : row.valueBool)
+    }));
+  return { ...rest, variants, stock: availableStock({ stock: product.stock, variants }), priceFromMzn, optionDefs: describeOptions(active), attributes };
+}
+
+function variantCreateData(variant: NormalizedVariant) {
+  return {
+    colorHex: variant.colorHex, size: variant.size, options: variant.options, optionKey: variant.optionKey, sku: variant.sku,
+    priceMzn: variant.priceMzn === null ? null : new Prisma.Decimal(variant.priceMzn), stock: variant.stock, active: variant.active
+  };
+}
+
+// Valores das características do produto. Sem `attributes` no pedido não se mexe nos valores existentes; com valor vazio apaga-se.
+async function saveAttributes(
+  tx: Prisma.TransactionClient, productId: string, categoryId: string | null, inputs: AttributeInput[] | undefined,
+  ctx: { categoryTouched: boolean; enforceRequired: boolean; active: boolean }
+) {
+  if (!inputs && !ctx.categoryTouched) return;
+  // Características de OUTRA categoria deixam de fazer sentido quando o produto muda de categoria.
+  await tx.productAttributeValue.deleteMany({ where: { productId, ...(categoryId ? { attribute: { categoryId: { not: categoryId } } } : {}) } });
+  const defs = categoryId ? await tx.categoryAttribute.findMany({ where: { categoryId } }) : [];
+  const byId = new Map(defs.map((def) => [def.id, def]));
+  for (const input of inputs ?? []) {
+    const def = byId.get(input.attributeId);
+    if (!def) throw new CatalogError("ATTRIBUTE_NOT_IN_CATEGORY");
+    const parsed = parseAttributeValue(def, input.value);
+    if (!parsed) { await tx.productAttributeValue.deleteMany({ where: { productId, attributeId: def.id } }); continue; }
+    await tx.productAttributeValue.upsert({
+      where: { productId_attributeId: { productId, attributeId: def.id } },
+      create: { productId, attributeId: def.id, ...parsed },
+      update: parsed
+    });
   }
+  if (ctx.enforceRequired && ctx.active) {
+    const have = new Set((await tx.productAttributeValue.findMany({ where: { productId }, select: { attributeId: true } })).map((row) => row.attributeId));
+    const missing = defs.find((def) => def.required && !have.has(def.id));
+    if (missing) throw new CatalogError("ATTRIBUTE_REQUIRED", missing.name);
+  }
+}
+
+// Erros de catálogo → resposta HTTP. Devolve true se tratou o erro.
+function replyCatalogError(error: unknown, reply: { code: (n: number) => { send: (b: unknown) => unknown } }): boolean {
+  if (error instanceof CatalogError && CATALOG_INPUT_ERRORS.has(error.code)) {
+    reply.code(400).send({ error: error.code, ...(error.detail ? { attribute: error.detail } : {}) });
+    return true;
+  }
+  if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+    const target = JSON.stringify(error.meta?.target ?? "").toLowerCase();
+    if (target.includes("sku")) { reply.code(409).send({ error: "SKU_ALREADY_EXISTS" }); return true; }
+    if (target.includes("optionkey")) { reply.code(409).send({ error: "DUPLICATE_VARIANT" }); return true; }
+    reply.code(409).send({ error: "PRODUCT_ALREADY_EXISTS" });
+    return true;
+  }
+  return false;
 }
 
 export async function productRoutes(app: FastifyInstance): Promise<void> {
@@ -65,18 +155,18 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     const q = z.object({ search: z.string().trim().max(100).optional(), categoryId: z.string().optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20) }).parse(request.query);
     const where = { active: true, ...(q.categoryId ? { categoryId: q.categoryId } : {}), ...(q.search ? { OR: [{ name: { contains: q.search, mode: "insensitive" as const } }, { description: { contains: q.search, mode: "insensitive" as const } }] } : {}) };
     const [data, total] = await Promise.all([
-      prisma.product.findMany({ where, skip: (q.page - 1) * q.limit, take: q.limit, orderBy: { createdAt: "desc" }, include: { category: true, images: { orderBy: { sortOrder: "asc" } }, variants: { where: { active: true }, orderBy: { createdAt: "asc" } } } }),
+      prisma.product.findMany({ where, skip: (q.page - 1) * q.limit, take: q.limit, orderBy: { createdAt: "desc" }, include: PRODUCT_INCLUDE }),
       prisma.product.count({ where })
     ]);
-    return { data, pagination: { page: q.page, limit: q.limit, total } };
+    return { data: data.map((product) => present(product, true)), pagination: { page: q.page, limit: q.limit, total } };
   });
 
   app.get("/products/:id", async (request, reply) => {
     const parsed = z.object({ id: z.string().min(1) }).safeParse(request.params);
     if (!parsed.success) return reply.code(400).send({ error: "INVALID_INPUT" });
-    const product = await prisma.product.findUnique({ where: { id: parsed.data.id }, include: { category: true, images: { orderBy: { sortOrder: "asc" } }, variants: { where: { active: true }, orderBy: { createdAt: "asc" } } } });
+    const product = await prisma.product.findUnique({ where: { id: parsed.data.id }, include: PRODUCT_INCLUDE });
     if (!product || !product.active) return reply.code(404).send({ error: "PRODUCT_NOT_FOUND" });
-    return product;
+    return present(product, true);
   });
 
   app.get("/categories", async () => {
@@ -139,10 +229,10 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
       ...(q.search ? { name: { contains: q.search, mode: "insensitive" as const } } : {})
     };
     const [data, total] = await Promise.all([
-      prisma.product.findMany({ where, skip: (q.page - 1) * q.limit, take: q.limit, orderBy: { createdAt: "desc" }, include: { category: true, images: { orderBy: { sortOrder: "asc" } }, variants: { where: { active: true }, orderBy: { createdAt: "asc" } } } }),
+      prisma.product.findMany({ where, skip: (q.page - 1) * q.limit, take: q.limit, orderBy: { createdAt: "desc" }, include: ADMIN_WRITE_INCLUDE }),
       prisma.product.count({ where })
     ]);
-    return { data, pagination: { page: q.page, limit: q.limit, total } };
+    return { data: data.map((product) => present(product, false)), pagination: { page: q.page, limit: q.limit, total } };
   });
 
   app.post("/admin/products", { preHandler: adminOnly }, async (request, reply) => {
@@ -151,22 +241,23 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     const slug = slugify(parsed.data.name);
     if (!slug) return reply.code(400).send({ error: "INVALID_NAME" });
     try {
-      validateVariants(parsed.data.variants ?? []);
-      const totalStock = parsed.data.variants?.length ? variantTotal(parsed.data.variants) : parsed.data.stock;
-      const product = await prisma.product.create({
-        data: {
-          name: parsed.data.name, slug, description: parsed.data.description, priceMzn: new Prisma.Decimal(parsed.data.priceMzn),
-          stock: totalStock, active: parsed.data.active, categoryId: parsed.data.categoryId,
-          variants: parsed.data.variants?.length ? { create: parsed.data.variants } : undefined
-        },
-        include: { category: true, images: { orderBy: { sortOrder: "asc" } }, variants: { orderBy: { createdAt: "asc" } } }
+      const variants = parsed.data.variants?.length ? normalizeVariants(parsed.data.variants) : [];
+      const product = await prisma.$transaction(async (tx) => {
+        const created = await tx.product.create({
+          data: {
+            name: parsed.data.name, slug, description: parsed.data.description, priceMzn: new Prisma.Decimal(parsed.data.priceMzn),
+            // Com variantes o stock vive nelas (a API calcula o total); o do produto só conta para produtos simples.
+            stock: variants.length ? 0 : parsed.data.stock, active: parsed.data.active, categoryId: parsed.data.categoryId,
+            variants: variants.length ? { create: variants.map(variantCreateData) } : undefined
+          }
+        });
+        await saveAttributes(tx, created.id, created.categoryId, parsed.data.attributes, { categoryTouched: true, enforceRequired: true, active: created.active });
+        return tx.product.findUniqueOrThrow({ where: { id: created.id }, include: ADMIN_WRITE_INCLUDE });
       });
       await audit({ actorId: request.auth!.userId, action: "PRODUCT_CREATED", entity: "Product", entityId: product.id });
-      return reply.code(201).send(product);
+      return reply.code(201).send(present(product, false));
     } catch (error) {
-      const message = error instanceof Error ? error.message : "PRODUCT_CREATE_FAILED";
-      if (message === "DUPLICATE_VARIANT" || message === "VARIANT_ATTRIBUTE_REQUIRED") return reply.code(400).send({ error: message });
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return reply.code(409).send({ error: "PRODUCT_ALREADY_EXISTS" });
+      if (replyCatalogError(error, reply)) return;
       throw error;
     }
   });
@@ -198,11 +289,10 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     for (let i = 0; i < parsed.data.products.length; i++) {
       const item = parsed.data.products[i];
       try {
-        validateVariants(item.variants ?? []);
+        const variants = item.variants?.length ? normalizeVariants(item.variants) : [];
         const slug = slugify(item.name);
         if (!slug) throw new Error("INVALID_NAME");
-        const totalStock = item.variants?.length ? variantTotal(item.variants) : item.stock;
-        await prisma.product.create({ data: { name: item.name, slug, description: item.description, priceMzn: new Prisma.Decimal(item.priceMzn), stock: totalStock, active: item.active, categoryId: item.categoryId, variants: item.variants?.length ? { create: item.variants } : undefined } });
+        await prisma.product.create({ data: { name: item.name, slug, description: item.description, priceMzn: new Prisma.Decimal(item.priceMzn), stock: variants.length ? 0 : item.stock, active: item.active, categoryId: item.categoryId, variants: variants.length ? { create: variants.map(variantCreateData) } : undefined } });
         created++;
       } catch (error) {
         const message = error instanceof Error && KNOWN_PRODUCT_ERRORS.has(error.message)
@@ -222,41 +312,46 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     const body = productPatchSchema.safeParse(request.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     try {
-      const { variants, ...base } = body.data;
-      if (variants) validateVariants(variants);
+      const { variants: variantInputs, attributes, ...base } = body.data;
+      const variants = variantInputs ? normalizeVariants(variantInputs) : undefined;
       const product = await prisma.$transaction(async (tx) => {
         const current = await tx.product.findUnique({ where: { id: params.data.id } });
         if (!current) throw new Error("PRODUCT_NOT_FOUND");
         const data: Prisma.ProductUncheckedUpdateInput = { ...base, priceMzn: base.priceMzn === undefined ? undefined : new Prisma.Decimal(base.priceMzn) };
         if (base.name) data.slug = slugify(base.name);
-        if (variants) data.stock = variants.length ? variantTotal(variants) : (base.stock ?? 0);
-        // Produto que tem variantes: o stock é a soma das variantes, um `stock` solto no PATCH não o pode sobrepor.
+        // Com variantes o stock vive nelas (o produto guarda 0 e a API calcula o total). Sem variantes, o stock é do produto.
+        if (variants) data.stock = variants.length ? 0 : (base.stock ?? 0);
+        // Produto que tem variantes: um `stock` solto no PATCH não pode sobrepor o das variantes.
         else if (base.stock !== undefined && (await tx.productVariant.count({ where: { productId: current.id, active: true } })) > 0) delete data.stock;
         const updated = await tx.product.update({ where: { id: params.data.id }, data });
         if (variants) {
-          // Sincroniza por (cor, tamanho) em vez de apagar e recriar: apagar punha OrderItem.variantId a NULL
+          // Sincroniza pela chave canónica das opções em vez de apagar e recriar: apagar punha OrderItem.variantId a NULL
           // (ON DELETE SET NULL) e os cancelamentos/reembolsos deixavam de repor o stock da variante.
-          const keyOf = (v: { colorHex?: string | null; size?: string | null }) => `${v.colorHex ?? ""}|${v.size ?? ""}`;
           const existing = await tx.productVariant.findMany({ where: { productId: updated.id } });
-          const byKey = new Map(existing.map((v) => [keyOf(v), v]));
-          const incoming = new Set(variants.map(keyOf));
-          for (const v of variants) {
-            const match = byKey.get(keyOf(v));
-            if (match) await tx.productVariant.update({ where: { id: match.id }, data: { stock: v.stock, active: v.active } });
-            else await tx.productVariant.create({ data: { ...v, productId: updated.id } });
+          const byKey = new Map<string, (typeof existing)[number]>();
+          for (const v of existing) {
+            const key = v.optionKey ?? "";
+            const seen = byKey.get(key);
+            if (!seen || (!seen.active && v.active)) byKey.set(key, v); // havendo duas, vale a ativa
           }
-          const removed = existing.filter((v) => !incoming.has(keyOf(v)));
+          const incoming = new Set(variants.map((v) => v.optionKey));
+          for (const v of variants) {
+            const match = byKey.get(v.optionKey);
+            if (match) await tx.productVariant.update({ where: { id: match.id }, data: variantCreateData(v) });
+            else await tx.productVariant.create({ data: { ...variantCreateData(v), productId: updated.id } });
+          }
+          const removed = existing.filter((v) => v.active && !incoming.has(v.optionKey ?? ""));
           if (removed.length) await tx.productVariant.updateMany({ where: { id: { in: removed.map((v) => v.id) } }, data: { active: false, stock: 0 } });
         }
-        return tx.product.findUniqueOrThrow({ where: { id: updated.id }, include: { category: true, images: { orderBy: { sortOrder: "asc" } }, variants: { orderBy: { createdAt: "asc" } } } });
+        await saveAttributes(tx, updated.id, updated.categoryId, attributes, { categoryTouched: base.categoryId !== undefined, enforceRequired: attributes !== undefined, active: updated.active });
+        return tx.product.findUniqueOrThrow({ where: { id: updated.id }, include: ADMIN_WRITE_INCLUDE });
       });
       await audit({ actorId: request.auth!.userId, action: "PRODUCT_UPDATED", entity: "Product", entityId: product.id, metadata: body.data });
-      return product;
+      return present(product, false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "PRODUCT_UPDATE_FAILED";
       if (message === "PRODUCT_NOT_FOUND") return reply.code(404).send({ error: message });
-      if (message === "DUPLICATE_VARIANT" || message === "VARIANT_ATTRIBUTE_REQUIRED") return reply.code(400).send({ error: message });
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return reply.code(409).send({ error: "PRODUCT_ALREADY_EXISTS" });
+      if (replyCatalogError(error, reply)) return;
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") return reply.code(404).send({ error: "PRODUCT_NOT_FOUND" });
       throw error;
     }

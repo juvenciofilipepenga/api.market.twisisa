@@ -30,6 +30,7 @@ export type OrderStatusHistoryMinAggregateOutputType = {
   from: $Enums.OrderStatus | null
   to: $Enums.OrderStatus | null
   reason: string | null
+  location: string | null
   actorId: string | null
   createdAt: Date | null
 }
@@ -40,6 +41,7 @@ export type OrderStatusHistoryMaxAggregateOutputType = {
   from: $Enums.OrderStatus | null
   to: $Enums.OrderStatus | null
   reason: string | null
+  location: string | null
   actorId: string | null
   createdAt: Date | null
 }
@@ -50,6 +52,7 @@ export type OrderStatusHistoryCountAggregateOutputType = {
   from: number
   to: number
   reason: number
+  location: number
   actorId: number
   createdAt: number
   _all: number
@@ -62,6 +65,7 @@ export type OrderStatusHistoryMinAggregateInputType = {
   from?: true
   to?: true
   reason?: true
+  location?: true
   actorId?: true
   createdAt?: true
 }
@@ -72,6 +76,7 @@ export type OrderStatusHistoryMaxAggregateInputType = {
   from?: true
   to?: true
   reason?: true
+  location?: true
   actorId?: true
   createdAt?: true
 }
@@ -82,6 +87,7 @@ export type OrderStatusHistoryCountAggregateInputType = {
   from?: true
   to?: true
   reason?: true
+  location?: true
   actorId?: true
   createdAt?: true
   _all?: true
@@ -165,6 +171,7 @@ export type OrderStatusHistoryGroupByOutputType = {
   from: $Enums.OrderStatus | null
   to: $Enums.OrderStatus
   reason: string | null
+  location: string | null
   actorId: string | null
   createdAt: Date
   _count: OrderStatusHistoryCountAggregateOutputType | null
@@ -196,6 +203,7 @@ export type OrderStatusHistoryWhereInput = {
   from?: Prisma.EnumOrderStatusNullableFilter<"OrderStatusHistory"> | $Enums.OrderStatus | null
   to?: Prisma.EnumOrderStatusFilter<"OrderStatusHistory"> | $Enums.OrderStatus
   reason?: Prisma.StringNullableFilter<"OrderStatusHistory"> | string | null
+  location?: Prisma.StringNullableFilter<"OrderStatusHistory"> | string | null
   actorId?: Prisma.StringNullableFilter<"OrderStatusHistory"> | string | null
   createdAt?: Prisma.DateTimeFilter<"OrderStatusHistory"> | Date | string
   order?: Prisma.XOR<Prisma.OrderScalarRelationFilter, Prisma.OrderWhereInput>
@@ -207,6 +215,7 @@ export type OrderStatusHistoryOrderByWithRelationInput = {
   from?: Prisma.SortOrderInput | Prisma.SortOrder
   to?: Prisma.SortOrder
   reason?: Prisma.SortOrderInput | Prisma.SortOrder
+  location?: Prisma.SortOrderInput | Prisma.SortOrder
   actorId?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   order?: Prisma.OrderOrderByWithRelationInput
@@ -221,6 +230,7 @@ export type OrderStatusHistoryWhereUniqueInput = Prisma.AtLeast<{
   from?: Prisma.EnumOrderStatusNullableFilter<"OrderStatusHistory"> | $Enums.OrderStatus | null
   to?: Prisma.EnumOrderStatusFilter<"OrderStatusHistory"> | $Enums.OrderStatus
   reason?: Prisma.StringNullableFilter<"OrderStatusHistory"> | string | null
+  location?: Prisma.StringNullableFilter<"OrderStatusHistory"> | string | null
   actorId?: Prisma.StringNullableFilter<"OrderStatusHistory"> | string | null
   createdAt?: Prisma.DateTimeFilter<"OrderStatusHistory"> | Date | string
   order?: Prisma.XOR<Prisma.OrderScalarRelationFilter, Prisma.OrderWhereInput>
@@ -232,6 +242,7 @@ export type OrderStatusHistoryOrderByWithAggregationInput = {
   from?: Prisma.SortOrderInput | Prisma.SortOrder
   to?: Prisma.SortOrder
   reason?: Prisma.SortOrderInput | Prisma.SortOrder
+  location?: Prisma.SortOrderInput | Prisma.SortOrder
   actorId?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   _count?: Prisma.OrderStatusHistoryCountOrderByAggregateInput
@@ -248,6 +259,7 @@ export type OrderStatusHistoryScalarWhereWithAggregatesInput = {
   from?: Prisma.EnumOrderStatusNullableWithAggregatesFilter<"OrderStatusHistory"> | $Enums.OrderStatus | null
   to?: Prisma.EnumOrderStatusWithAggregatesFilter<"OrderStatusHistory"> | $Enums.OrderStatus
   reason?: Prisma.StringNullableWithAggregatesFilter<"OrderStatusHistory"> | string | null
+  location?: Prisma.StringNullableWithAggregatesFilter<"OrderStatusHistory"> | string | null
   actorId?: Prisma.StringNullableWithAggregatesFilter<"OrderStatusHistory"> | string | null
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"OrderStatusHistory"> | Date | string
 }
@@ -257,6 +269,7 @@ export type OrderStatusHistoryCreateInput = {
   from?: $Enums.OrderStatus | null
   to: $Enums.OrderStatus
   reason?: string | null
+  location?: string | null
   actorId?: string | null
   createdAt?: Date | string
   order: Prisma.OrderCreateNestedOneWithoutStatusHistoryInput
@@ -268,6 +281,7 @@ export type OrderStatusHistoryUncheckedCreateInput = {
   from?: $Enums.OrderStatus | null
   to: $Enums.OrderStatus
   reason?: string | null
+  location?: string | null
   actorId?: string | null
   createdAt?: Date | string
 }
@@ -277,6 +291,7 @@ export type OrderStatusHistoryUpdateInput = {
   from?: Prisma.NullableEnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus | null
   to?: Prisma.EnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  location?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   actorId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   order?: Prisma.OrderUpdateOneRequiredWithoutStatusHistoryNestedInput
@@ -288,6 +303,7 @@ export type OrderStatusHistoryUncheckedUpdateInput = {
   from?: Prisma.NullableEnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus | null
   to?: Prisma.EnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  location?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   actorId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -298,6 +314,7 @@ export type OrderStatusHistoryCreateManyInput = {
   from?: $Enums.OrderStatus | null
   to: $Enums.OrderStatus
   reason?: string | null
+  location?: string | null
   actorId?: string | null
   createdAt?: Date | string
 }
@@ -307,6 +324,7 @@ export type OrderStatusHistoryUpdateManyMutationInput = {
   from?: Prisma.NullableEnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus | null
   to?: Prisma.EnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  location?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   actorId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -317,6 +335,7 @@ export type OrderStatusHistoryUncheckedUpdateManyInput = {
   from?: Prisma.NullableEnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus | null
   to?: Prisma.EnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  location?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   actorId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -337,6 +356,7 @@ export type OrderStatusHistoryCountOrderByAggregateInput = {
   from?: Prisma.SortOrder
   to?: Prisma.SortOrder
   reason?: Prisma.SortOrder
+  location?: Prisma.SortOrder
   actorId?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
 }
@@ -347,6 +367,7 @@ export type OrderStatusHistoryMaxOrderByAggregateInput = {
   from?: Prisma.SortOrder
   to?: Prisma.SortOrder
   reason?: Prisma.SortOrder
+  location?: Prisma.SortOrder
   actorId?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
 }
@@ -357,6 +378,7 @@ export type OrderStatusHistoryMinOrderByAggregateInput = {
   from?: Prisma.SortOrder
   to?: Prisma.SortOrder
   reason?: Prisma.SortOrder
+  location?: Prisma.SortOrder
   actorId?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
 }
@@ -412,6 +434,7 @@ export type OrderStatusHistoryCreateWithoutOrderInput = {
   from?: $Enums.OrderStatus | null
   to: $Enums.OrderStatus
   reason?: string | null
+  location?: string | null
   actorId?: string | null
   createdAt?: Date | string
 }
@@ -421,6 +444,7 @@ export type OrderStatusHistoryUncheckedCreateWithoutOrderInput = {
   from?: $Enums.OrderStatus | null
   to: $Enums.OrderStatus
   reason?: string | null
+  location?: string | null
   actorId?: string | null
   createdAt?: Date | string
 }
@@ -460,6 +484,7 @@ export type OrderStatusHistoryScalarWhereInput = {
   from?: Prisma.EnumOrderStatusNullableFilter<"OrderStatusHistory"> | $Enums.OrderStatus | null
   to?: Prisma.EnumOrderStatusFilter<"OrderStatusHistory"> | $Enums.OrderStatus
   reason?: Prisma.StringNullableFilter<"OrderStatusHistory"> | string | null
+  location?: Prisma.StringNullableFilter<"OrderStatusHistory"> | string | null
   actorId?: Prisma.StringNullableFilter<"OrderStatusHistory"> | string | null
   createdAt?: Prisma.DateTimeFilter<"OrderStatusHistory"> | Date | string
 }
@@ -469,6 +494,7 @@ export type OrderStatusHistoryCreateManyOrderInput = {
   from?: $Enums.OrderStatus | null
   to: $Enums.OrderStatus
   reason?: string | null
+  location?: string | null
   actorId?: string | null
   createdAt?: Date | string
 }
@@ -478,6 +504,7 @@ export type OrderStatusHistoryUpdateWithoutOrderInput = {
   from?: Prisma.NullableEnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus | null
   to?: Prisma.EnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  location?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   actorId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -487,6 +514,7 @@ export type OrderStatusHistoryUncheckedUpdateWithoutOrderInput = {
   from?: Prisma.NullableEnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus | null
   to?: Prisma.EnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  location?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   actorId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -496,6 +524,7 @@ export type OrderStatusHistoryUncheckedUpdateManyWithoutOrderInput = {
   from?: Prisma.NullableEnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus | null
   to?: Prisma.EnumOrderStatusFieldUpdateOperationsInput | $Enums.OrderStatus
   reason?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  location?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   actorId?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
@@ -508,6 +537,7 @@ export type OrderStatusHistorySelect<ExtArgs extends runtime.Types.Extensions.In
   from?: boolean
   to?: boolean
   reason?: boolean
+  location?: boolean
   actorId?: boolean
   createdAt?: boolean
   order?: boolean | Prisma.OrderDefaultArgs<ExtArgs>
@@ -519,6 +549,7 @@ export type OrderStatusHistorySelectCreateManyAndReturn<ExtArgs extends runtime.
   from?: boolean
   to?: boolean
   reason?: boolean
+  location?: boolean
   actorId?: boolean
   createdAt?: boolean
   order?: boolean | Prisma.OrderDefaultArgs<ExtArgs>
@@ -530,6 +561,7 @@ export type OrderStatusHistorySelectUpdateManyAndReturn<ExtArgs extends runtime.
   from?: boolean
   to?: boolean
   reason?: boolean
+  location?: boolean
   actorId?: boolean
   createdAt?: boolean
   order?: boolean | Prisma.OrderDefaultArgs<ExtArgs>
@@ -541,11 +573,12 @@ export type OrderStatusHistorySelectScalar = {
   from?: boolean
   to?: boolean
   reason?: boolean
+  location?: boolean
   actorId?: boolean
   createdAt?: boolean
 }
 
-export type OrderStatusHistoryOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "orderId" | "from" | "to" | "reason" | "actorId" | "createdAt", ExtArgs["result"]["orderStatusHistory"]>
+export type OrderStatusHistoryOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "orderId" | "from" | "to" | "reason" | "location" | "actorId" | "createdAt", ExtArgs["result"]["orderStatusHistory"]>
 export type OrderStatusHistoryInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   order?: boolean | Prisma.OrderDefaultArgs<ExtArgs>
 }
@@ -567,6 +600,7 @@ export type $OrderStatusHistoryPayload<ExtArgs extends runtime.Types.Extensions.
     from: $Enums.OrderStatus | null
     to: $Enums.OrderStatus
     reason: string | null
+    location: string | null
     actorId: string | null
     createdAt: Date
   }, ExtArgs["result"]["orderStatusHistory"]>
@@ -998,6 +1032,7 @@ export interface OrderStatusHistoryFieldRefs {
   readonly from: Prisma.FieldRef<"OrderStatusHistory", 'OrderStatus'>
   readonly to: Prisma.FieldRef<"OrderStatusHistory", 'OrderStatus'>
   readonly reason: Prisma.FieldRef<"OrderStatusHistory", 'String'>
+  readonly location: Prisma.FieldRef<"OrderStatusHistory", 'String'>
   readonly actorId: Prisma.FieldRef<"OrderStatusHistory", 'String'>
   readonly createdAt: Prisma.FieldRef<"OrderStatusHistory", 'DateTime'>
 }

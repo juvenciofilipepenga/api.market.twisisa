@@ -143,4 +143,20 @@ Setup: set `ZUMBOPAY_ENABLED=true`, `ZUMBOPAY_API_KEY`, `ZUMBOPAY_WEBHOOK_SECRET
 - **Circuit breaker**: 3 ZumboPay failures (network, 5xx, 401/403/429) within 5 minutes switch customers to manual payment for 10 minutes (state stored in `PaymentSettings`, so it works on serverless). A wrong phone number does not count. Admins are notified, and can re-enable ZumboPay immediately.
 - `POST /api/v1/payments/:id/claim` is the "Já paguei" action and `GET /api/v1/admin/payments/pending-review` feeds the admin list. `GET /api/v1/payments/methods` returns `methods` (online, empty when switched off or tripped), `onlineStatus` and `manual` (destinations, only when at least one is filled in).
 
-After pulling these changes run `npm run migrate` (migrations `008` to `011`) and `npm run generate` (new Prisma models and columns).
+## Flexible catalog (phase 1: database and server)
+
+- **Category attributes** (Marca, RAM, Material…): defined per category by the admin, no code changes. Types `TEXT`, `NUMBER`, `BOOLEAN`, `SELECT`, `MEASURE`; flags `required`, `showPublic`, `filterable`, `sortOrder`. Endpoints: `GET/POST /admin/categories/:id/attributes`, `PATCH/DELETE /admin/category-attributes/:id`. A product's values are saved with `attributes: [{ attributeId, value }]` on `POST/PATCH /admin/products`.
+- **Variants** carry `options` (e.g. `{"Cor":"#000000","Tamanho":"M"}`, or `{"Capacidade":"256 GB"}`), optional `sku` and optional `priceMzn`. The old `colorHex`/`size` inputs still work and keep being filled. Duplicate combinations are rejected by a database index (`optionKey`, active variants) and in the API; SKUs are unique among active variants.
+- **Sources of truth:** price = variant price if set, else product price. Stock = sum of active variants when the product has variants (the product's own `stock` is ignored and the API returns the computed total), else the product's stock. The server decides price and availability for every order line (`services/catalog.ts: resolveOrderLine`) and stores the variant text and SKU on the order item.
+- `GET /products`, `GET /products/:id` and the admin endpoints now also return `optionDefs`, `attributes`, `priceFromMzn`, and per-variant `options` / `effectivePriceMzn`.
+- **Admin screens (phase 2):** *Categorias → Características* (define the specifications of each category) and the product form in 7 sections (general info, category, images, price and inventory, specifications, variants, publication) with a flexible variant editor (any options, only the combinations actually sold, optional SKU and price per variant, deactivate/reactivate).
+- **Store (phase 3):** the product page shows the specifications table and a generic option picker: a value that does not exist, has no stock, or does not combine with what was already chosen is struck through and cannot be selected; the price follows the chosen variant (or shows "A partir de").
+## Admin panel: attention first
+
+- `GET /api/v1/admin/attention`: everything waiting for the admin, oldest first (claimed manual payments count, paid orders to prepare with payer name/number/time, cancellation requests, refunds, escalated chats, low stock using the variants' total). `GET /api/v1/admin/history?page=&limit=`: paid / shipped / delivered / cancelled events, 10 at a time.
+- `GET /api/v1/admin/orders` accepts `bucket=action|ongoing|done` (3 tabs instead of 12 statuses: `services/orderBuckets.ts`) and `q=` (order number, customer name or email). *Needs action* is sorted oldest-first.
+- Store: every page opens at the top (also the admin area), the footer only shows on the home page and legal pages, the review form opens from a button, order numbers are shown short (`#9881DB2E`, full number on tap/detail), disabled primary buttons are readable.
+
+- `node scripts/inspect-catalog.js` prints the real catalog schema and data-quality checks (read-only).
+
+After pulling these changes run `npm run migrate` (migrations `008` to `012`) and `npm run generate` (new Prisma models and columns).

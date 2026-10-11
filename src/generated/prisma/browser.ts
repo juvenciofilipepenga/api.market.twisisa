@@ -117,3 +117,13 @@ export type AuditLog = Prisma.AuditLogModel
  * 
  */
 export type Review = Prisma.ReviewModel
+/**
+ * Model InvoiceSettings
+ * 
+ */
+export type InvoiceSettings = Prisma.InvoiceSettingsModel
+/**
+ * Model PaymentSettings
+ * 
+ */
+export type PaymentSettings = Prisma.PaymentSettingsModel

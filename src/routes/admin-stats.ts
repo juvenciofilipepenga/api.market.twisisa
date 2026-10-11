@@ -42,7 +42,14 @@ export async function adminStatsRoutes(app: FastifyInstance): Promise<void> {
       prisma.user.count({ where: { createdAt: { gte: since }, roles: { none: { role: { name: { in: [RoleName.ADMIN, RoleName.SUPER_ADMIN] } } } } } }),
       prisma.user.count({ where: { createdAt: { gte: prevSince, lt: since }, roles: { none: { role: { name: { in: [RoleName.ADMIN, RoleName.SUPER_ADMIN] } } } } } }),
       prisma.product.count({ where: { active: true } }),
-      prisma.product.count({ where: { active: true, stock: { lte: LOW_STOCK } } }),
+      // Produto simples: stock do produto. Produto com variantes: soma do stock das variantes ativas (o do produto já não conta).
+      prisma.$queryRaw<Array<{ n: number }>>`
+        SELECT count(*)::int AS n FROM "Product" p
+        WHERE p.active AND (
+          CASE WHEN EXISTS (SELECT 1 FROM "ProductVariant" v WHERE v."productId" = p.id AND v.active)
+            THEN (SELECT COALESCE(SUM(v.stock), 0) FROM "ProductVariant" v WHERE v."productId" = p.id AND v.active)
+            ELSE p.stock END
+        ) <= ${LOW_STOCK}`.then((rows) => rows[0]?.n ?? 0),
       prisma.order.count({ where: { status: OrderStatus.PAYMENT_REVIEW } }),
       prisma.order.count({ where: { status: OrderStatus.PENDING_PAYMENT } }),
       prisma.order.count({ where: { status: OrderStatus.CANCELLATION_REQUESTED } }),

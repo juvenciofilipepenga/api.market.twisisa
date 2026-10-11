@@ -20,6 +20,8 @@ import { reviewRoutes } from "./routes/reviews.js";
 import { adminStatsRoutes } from "./routes/admin-stats.js";
 import { invoiceSettingsRoutes } from "./routes/invoice-settings.js";
 import { paymentSettingsRoutes } from "./routes/payment-settings.js";
+import { categoryAttributeRoutes } from "./routes/category-attributes.js";
+import { adminAttentionRoutes } from "./routes/admin-attention.js";
 
 export function buildApp() {
   // Em produção corre atrás do proxy da plataforma (Render/Railway/Fly/Vercel); confiar nele é o que
@@ -45,6 +47,8 @@ export function buildApp() {
     await adminStatsRoutes(api);
     await invoiceSettingsRoutes(api);
     await paymentSettingsRoutes(api);
+    await categoryAttributeRoutes(api);
+    await adminAttentionRoutes(api);
   }, { prefix: "/api/v1" });
   app.setErrorHandler((error, request, reply) => {
     // Query/params inválidos que usam .parse() (em vez de .safeParse()) são erro do cliente, não 500.
