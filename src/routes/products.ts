@@ -6,6 +6,7 @@ import { requireAuth, requireRole } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
 import { deleteCloudinaryAsset } from "../services/cloudinary.js";
 import { computePricing, type PricingInput } from "../services/pricing.js";
+import { findCategory, matchAttribute } from "../services/bulkImport.js";
 import { availableStock, CatalogError, describeOptions, normalizeVariants, optionsFromLegacy, parseAttributeValue, type NormalizedVariant, type VariantOptions } from "../services/catalog.js";
 
 function slugify(value: string): string {
@@ -64,6 +65,20 @@ const productWriteSchema = productBaseSchema.extend({
   active: z.boolean().default(true)
 }).refine((p) => p.pricing !== undefined || p.priceMzn !== undefined, { message: "pricing or priceMzn required" });
 
+// Importação em massa (CSV). Cada linha é validada à parte (uma linha má não deita abaixo as outras) e refere a
+// categoria e as características pelo NOME, tal como estão no ficheiro; o servidor resolve os ids.
+const bulkItemSchema = productBaseSchema.omit({ attributes: true }).extend({
+  stock: z.number().int().min(0).max(1_000_000).default(0),
+  active: z.boolean().default(true),
+  // Linha do ficheiro onde o registo começa (um registo pode ocupar várias linhas): só serve para dizer ONDE está o erro.
+  line: z.number().int().min(1).max(1_000_000).optional(),
+  category: z.string().trim().min(1).max(120).optional(),
+  attributes: z.array(z.object({ name: z.string().trim().min(1).max(60), value: z.string().trim().max(300) })).max(80).optional()
+}).refine((p) => p.pricing !== undefined || p.priceMzn !== undefined, { message: "pricing or priceMzn required" });
+
+const lineOf = (raw: unknown): number | undefined =>
+  typeof raw === "object" && raw !== null && typeof (raw as { line?: unknown }).line === "number" ? (raw as { line: number }).line : undefined;
+
 // Edição: campos opcionais e SEM defaults (um PATCH só com { active: false } não pode mexer no stock).
 // description/categoryId aceitam null para poderem ser limpos.
 const productPatchSchema = productBaseSchema.partial().extend({
@@ -72,7 +87,7 @@ const productPatchSchema = productBaseSchema.partial().extend({
 });
 
 const CATALOG_INPUT_ERRORS = new Set(["DUPLICATE_VARIANT", "VARIANT_ATTRIBUTE_REQUIRED", "DUPLICATE_SKU", "TOO_MANY_OPTIONS", "ATTRIBUTE_REQUIRED", "ATTRIBUTE_INVALID_VALUE", "ATTRIBUTE_NOT_IN_CATEGORY"]);
-const KNOWN_PRODUCT_ERRORS = new Set([...CATALOG_INPUT_ERRORS, "INVALID_NAME", "INVALID_PRICE"]);
+const KNOWN_PRODUCT_ERRORS = new Set([...CATALOG_INPUT_ERRORS, "INVALID_NAME", "INVALID_PRICE", "CATEGORY_NOT_FOUND", "ATTRIBUTE_NEEDS_CATEGORY"]);
 
 // Variantes: SÓ as ativas nas listas públicas e no detalhe; o admin recebe todas na resposta de gravação.
 const PRODUCT_INCLUDE = { category: true, images: { orderBy: { sortOrder: "asc" as const } }, variants: { where: { active: true }, orderBy: { createdAt: "asc" as const } }, attributeValues: { include: { attribute: true } } };
@@ -313,34 +328,63 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/admin/products/bulk", { preHandler: adminOnly }, async (request, reply) => {
-    const parsed = z.object({ products: z.array(productWriteSchema).min(1).max(500) }).safeParse(request.body);
+    const parsed = z.object({ products: z.array(z.unknown()).min(1).max(500) }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "INVALID_INPUT" });
-    const failed: Array<{ row: number; error: string }> = [];
+    const categories = await prisma.category.findMany({ select: { id: true, name: true, slug: true } });
+    const failed: Array<{ row: number; error: string; detail?: string }> = [];
+    const createdAttributes = new Set<string>();
     let created = 0;
     for (let i = 0; i < parsed.data.products.length; i++) {
-      const item = parsed.data.products[i];
+      const raw = parsed.data.products[i];
+      const rowNumber = lineOf(raw) ?? i + 2;
+      const check = bulkItemSchema.safeParse(raw);
+      if (!check.success) { failed.push({ row: rowNumber, error: "INVALID_ROW", detail: check.error.issues[0]?.path.join(".") || undefined }); continue; }
+      const item = check.data;
+      const newAttributes: string[] = [];
       try {
         const variants = item.variants?.length ? normalizeVariants(item.variants) : [];
         const slug = slugify(item.name);
         if (!slug) throw new Error("INVALID_NAME");
         const price = resolvePrice(item);
         if (price === null) throw new Error("INVALID_PRICE");
+        const category = findCategory(categories, item);
+        if (category === null) throw new CatalogError("CATEGORY_NOT_FOUND", item.categoryId ?? item.category);
+        if (item.attributes?.length && !category) throw new CatalogError("ATTRIBUTE_NEEDS_CATEGORY");
         await prisma.$transaction(async (tx) => {
-          const row = await tx.product.create({ data: { name: item.name, slug, description: item.description, priceMzn: new Prisma.Decimal(price), stock: variants.length ? 0 : item.stock, active: item.active, categoryId: item.categoryId, variants: variants.length ? { create: variants.map(variantCreateData) } : undefined } });
+          const row = await tx.product.create({ data: { name: item.name, slug, description: item.description, priceMzn: new Prisma.Decimal(price), stock: variants.length ? 0 : item.stock, active: item.active, categoryId: category?.id, variants: variants.length ? { create: variants.map(variantCreateData) } : undefined } });
           if (item.pricing) await tx.productPricing.create({ data: { productId: row.id, ...pricingData(item.pricing) } });
+          // Características por nome: a que a categoria ainda não tem é criada como texto livre (o admin pode mudar depois).
+          const inputs: AttributeInput[] = [];
+          if (category && item.attributes?.length) {
+            const defs = await tx.categoryAttribute.findMany({ where: { categoryId: category.id } });
+            let nextOrder = defs.reduce((max, def) => Math.max(max, def.sortOrder), -1) + 1;
+            for (const attribute of item.attributes) {
+              let def = matchAttribute(defs, attribute.name);
+              if (!def) {
+                const key = slugify(attribute.name);
+                if (attribute.name.length < 2 || !key) throw new CatalogError("ATTRIBUTE_INVALID_VALUE", attribute.name);
+                def = await tx.categoryAttribute.create({ data: { categoryId: category.id, name: attribute.name, key, type: "TEXT", sortOrder: nextOrder++ } });
+                defs.push(def);
+                newAttributes.push(`${category.name} > ${def.name}`);
+              }
+              inputs.push({ attributeId: def.id, value: attribute.value });
+            }
+          }
+          await saveAttributes(tx, row.id, category?.id ?? null, inputs.length ? inputs : undefined, { categoryTouched: true, enforceRequired: true, active: item.active });
         });
         created++;
+        for (const name of newAttributes) createdAttributes.add(name);
       } catch (error) {
-        const message = error instanceof Error && KNOWN_PRODUCT_ERRORS.has(error.message)
+        const code = error instanceof Error && KNOWN_PRODUCT_ERRORS.has(error.message)
           ? error.message
           : error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002"
             ? "PRODUCT_ALREADY_EXISTS"
             : "IMPORT_FAILED";
-        failed.push({ row: i + 2, error: message });
+        failed.push({ row: rowNumber, error: code, ...(error instanceof CatalogError && error.detail ? { detail: error.detail } : {}) });
       }
     }
-    await audit({ actorId: request.auth!.userId, action: "PRODUCT_BULK_IMPORTED", entity: "Product", metadata: { created, failed: failed.length } });
-    return reply.send({ created, failed });
+    await audit({ actorId: request.auth!.userId, action: "PRODUCT_BULK_IMPORTED", entity: "Product", metadata: { created, failed: failed.length, createdAttributes: createdAttributes.size } });
+    return reply.send({ created, failed, createdAttributes: [...createdAttributes] });
   });
 
   app.patch("/admin/products/:id", { preHandler: adminOnly }, async (request, reply) => {
