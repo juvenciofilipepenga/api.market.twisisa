@@ -11,6 +11,7 @@ import { ensureInvoice } from "../services/invoice.js";
 import { notifyAdmins, notifyUser } from "../services/notifications.js";
 import { notifyReferralCompletedIfFirst } from "../services/referrals.js";
 import { cancelPendingPayment, MANUAL_CLAIM_GRACE_MS, settlePayment, toView, type PaymentView } from "../services/paymentFlow.js";
+import { expireStaleOrders, paymentDeadline } from "../services/orderExpiry.js";
 import { getPaymentSettings, isProviderFailure, manualDetails, onlineStatus, recordProviderFailure, recordProviderSuccess } from "../services/paymentSettings.js";
 import { createCardCheckout, createCharge, walletFor, ZumboPayError, type ZpMethod } from "../services/zumbopay.js";
 
@@ -75,6 +76,13 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
     if (order.userId !== request.auth!.userId) return reply.code(403).send({ error: "FORBIDDEN" });
     // Só se pode iniciar pagamento enquanto a encomenda aguarda pagamento (não em PAID, SHIPPED, etc.).
     if (order.status !== OrderStatus.PENDING_PAYMENT) return reply.code(409).send({ error: "ORDER_PAYMENT_NOT_ALLOWED" });
+    // O relógio de pagamento começou quando o pedido foi enviado. Passado o prazo já não se inicia pagamento nenhum
+    // (a encomenda é fechada pelo serviço de expiração, que dá uma pequena tolerância a quem já pagou).
+    const deadlineMs = paymentDeadline(order.createdAt).getTime();
+    if (Date.now() >= deadlineMs) {
+      await expireStaleOrders({ orderId: order.id }).catch((error) => request.log.error(error, "order expiry failed"));
+      return reply.code(409).send({ error: "ORDER_EXPIRED" });
+    }
     // Um único pagamento ativo por encomenda. O ecrã de pagamento usa o paymentId devolvido para RETOMAR a espera.
     // Antes de recusar, actualiza o estado dos pendentes do ZumboPay: pode já ter expirado ou falhado (e então liberta o caminho).
     for (const existing of order.payments.filter((payment) => (payment.provider === "ZUMBOPAY" || payment.provider === "MANUAL") && activePaymentStates.includes(payment.status))) {
@@ -96,7 +104,7 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
       const windowMs = method === "CARD" ? 30 * 60_000 : env.PAYMENT_CONFIRM_WINDOW_SECONDS * 1000;
       let payment;
       try {
-        payment = await prisma.payment.create({ data: { orderId: order.id, provider: "ZUMBOPAY", status: PaymentStatus.INITIATED, amountMzn: order.totalMzn, method, paymentNumber, reference, expiresAt: new Date(Date.now() + windowMs) } });
+        payment = await prisma.payment.create({ data: { orderId: order.id, provider: "ZUMBOPAY", status: PaymentStatus.INITIATED, amountMzn: order.totalMzn, method, paymentNumber, reference, expiresAt: new Date(Math.min(Date.now() + windowMs, deadlineMs)) } });
       } catch (error) {
         if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return reply.code(409).send({ error: "PAYMENT_ALREADY_ACTIVE" });
         throw error;
@@ -133,7 +141,7 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
     }
 
     // MANUAL: o cliente vai pagar para a conta da loja e carrega em "Já paguei". O pedido só vive durante uma janela curta
-    // (por defeito 5 min): quem não paga a tempo expira sozinho e NUNCA chega ao admin.
+    // (ORDER_PAYMENT_WINDOW_SECONDS, por defeito 30 min desde o pedido): quem não paga a tempo expira sozinho e NUNCA chega ao admin.
     const manual = manualDetails(await getPaymentSettings());
     const destination = body.data.method === "MPESA" ? manual.mpesa : manual.emola;
     if (!manual.enabled || !destination) return reply.code(503).send({ error: "MANUAL_PAYMENT_UNAVAILABLE" });
@@ -154,7 +162,8 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
         data: {
           orderId: order.id, provider: "MANUAL", status: PaymentStatus.PENDING_CONFIRMATION, amountMzn: order.totalMzn, method: body.data.method,
           paymentNumber: body.data.paymentNumber, payerName: body.data.payerName, reference: randomReference("TW-PAY"),
-          expiresAt: new Date(Date.now() + env.MANUAL_PAYMENT_WINDOW_SECONDS * 1000)
+          // Nunca passa do prazo da encomenda: o contador do ecrã de pagamento é o tempo que resta desde o pedido.
+          expiresAt: new Date(Math.min(Date.now() + env.MANUAL_PAYMENT_WINDOW_SECONDS * 1000, deadlineMs))
         }
       });
       // Sem notificar o admin aqui: só lhe interessam os pedidos em que o cliente diz "Já paguei".
@@ -170,7 +179,7 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
   // Aceita-se mesmo depois de o prazo acabar (dentro de uma tolerância): quem pagou no último minuto não perde o pagamento.
   app.post("/payments/:id/claim", { preHandler: requireAuth }, async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
-    const body = z.object({ transactionCode: z.string().trim().regex(/^[A-Za-z0-9._-]{4,30}$/).optional() }).safeParse(request.body ?? {});
+    const body = z.object({ transactionCode: z.string().trim().regex(/^[A-Za-z0-9._-]{4,30}$/).optional(), proofUrl: z.string().url().max(2000).optional() }).safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const payment = await prisma.payment.findUnique({ where: { id: params.data.id }, include: { order: { include: { user: { select: { name: true } } } } } });
     if (!payment) return reply.code(404).send({ error: "PAYMENT_NOT_FOUND" });
@@ -180,6 +189,12 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
     const graceEnd = payment.expiresAt ? payment.expiresAt.getTime() + MANUAL_CLAIM_GRACE_MS : 0;
     const waiting = payment.status === PaymentStatus.INITIATED || payment.status === PaymentStatus.PENDING_CONFIRMATION || payment.status === PaymentStatus.TIMEOUT;
     if (!waiting || Date.now() > graceEnd) return reply.code(409).send({ error: "PAYMENT_NOT_CLAIMABLE" });
+    if (body.data.proofUrl) {
+      let proofUrl: URL;
+      try { proofUrl = new URL(body.data.proofUrl); } catch { return reply.code(400).send({ error: "INVALID_PROOF_URL" }); }
+      if (proofUrl.protocol !== "https:") return reply.code(400).send({ error: "PROOF_URL_MUST_BE_HTTPS" });
+      if (!env.CLOUDINARY_CLOUD_NAME || proofUrl.hostname !== "res.cloudinary.com" || !proofUrl.pathname.startsWith(`/${env.CLOUDINARY_CLOUD_NAME}/`)) return reply.code(400).send({ error: "PROOF_URL_MUST_BE_UPLOADED" });
+    }
     const code = body.data.transactionCode?.toUpperCase();
     if (code) {
       const reused = await prisma.payment.findFirst({ where: { transactionCode: code, id: { not: payment.id }, status: { notIn: [PaymentStatus.FAILED, PaymentStatus.TIMEOUT, PaymentStatus.CANCELLED, PaymentStatus.PAYMENT_REJECTED] } } });
@@ -188,7 +203,7 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
     let updated;
     try {
       updated = await prisma.$transaction(async (tx) => {
-        const result = await tx.payment.update({ where: { id: payment.id }, data: { status: PaymentStatus.PROOF_SUBMITTED, paidClaimedAt: new Date(), failureCode: null, failureMessage: null, ...(code ? { transactionCode: code } : {}) } });
+        const result = await tx.payment.update({ where: { id: payment.id }, data: { status: PaymentStatus.PROOF_SUBMITTED, paidClaimedAt: new Date(), failureCode: null, failureMessage: null, ...(code ? { transactionCode: code } : {}), ...(body.data.proofUrl ? { proofUrl: body.data.proofUrl } : {}) } });
         await tx.order.updateMany({ where: { id: payment.orderId, status: OrderStatus.PENDING_PAYMENT }, data: { status: OrderStatus.PAYMENT_REVIEW } });
         return result;
       });

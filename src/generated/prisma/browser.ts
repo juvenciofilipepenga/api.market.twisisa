@@ -48,6 +48,16 @@ export type Category = Prisma.CategoryModel
  */
 export type Product = Prisma.ProductModel
 /**
+ * Model ProductPricing
+ * 
+ */
+export type ProductPricing = Prisma.ProductPricingModel
+/**
+ * Model PricingSettings
+ * 
+ */
+export type PricingSettings = Prisma.PricingSettingsModel
+/**
  * Model ProductVariant
  * 
  */
@@ -127,3 +137,13 @@ export type InvoiceSettings = Prisma.InvoiceSettingsModel
  * 
  */
 export type PaymentSettings = Prisma.PaymentSettingsModel
+/**
+ * Model CategoryAttribute
+ * 
+ */
+export type CategoryAttribute = Prisma.CategoryAttributeModel
+/**
+ * Model ProductAttributeValue
+ * 
+ */
+export type ProductAttributeValue = Prisma.ProductAttributeValueModel

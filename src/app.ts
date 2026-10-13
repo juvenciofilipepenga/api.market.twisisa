@@ -21,6 +21,7 @@ import { adminStatsRoutes } from "./routes/admin-stats.js";
 import { invoiceSettingsRoutes } from "./routes/invoice-settings.js";
 import { paymentSettingsRoutes } from "./routes/payment-settings.js";
 import { categoryAttributeRoutes } from "./routes/category-attributes.js";
+import { pricingSettingsRoutes } from "./routes/pricing-settings.js";
 import { adminAttentionRoutes } from "./routes/admin-attention.js";
 
 export function buildApp() {
@@ -48,6 +49,7 @@ export function buildApp() {
     await invoiceSettingsRoutes(api);
     await paymentSettingsRoutes(api);
     await categoryAttributeRoutes(api);
+    await pricingSettingsRoutes(api);
     await adminAttentionRoutes(api);
   }, { prefix: "/api/v1" });
   app.setErrorHandler((error, request, reply) => {

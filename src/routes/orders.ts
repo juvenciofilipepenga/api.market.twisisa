@@ -5,6 +5,9 @@ import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { CatalogError, resolveOrderLine } from "../services/catalog.js";
 import { ORDER_BUCKETS } from "../services/orderBuckets.js";
+import { deliveryDeadline, EXPIRY_REASON, expireStaleOrders, paymentDeadline } from "../services/orderExpiry.js";
+import { classifyOrder, ORDER_TABS, tabWhere } from "../services/orderTabs.js";
+import { finalSuccess } from "../services/paymentFlow.js";
 import { randomReference } from "../lib/auth.js";
 import { requireAuth, isAdmin } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
@@ -82,8 +85,10 @@ const restockOnTransition = new Set<OrderStatus>([
 const listOrdersSchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(20),
-  // "Faturas": só as encomendas que já têm fatura emitida.
-  invoiced: z.enum(["true", "false"]).optional()
+  // Legado: "Faturas" = o mesmo que o separador "wallet" (pago e confirmado).
+  invoiced: z.enum(["true", "false"]).optional(),
+  // Separador: all | wallet | p2p | refused (ver services/orderTabs.ts).
+  tab: z.enum(ORDER_TABS).optional()
 });
 
 export async function orderRoutes(app: FastifyInstance): Promise<void> {
@@ -91,27 +96,42 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
   // Resposta pequena de propósito (sem pagamentos nem histórico): o detalhe completo é GET /orders/:id.
   app.get("/orders", { preHandler: requireAuth }, async (request, reply) => {
     const q = listOrdersSchema.parse(request.query);
-    const where = {
-      userId: request.auth!.userId,
-      ...(q.invoiced === "true" ? { invoice: { isNot: null } } : {})
-    };
-    const [data, total] = await Promise.all([
+    const userId = request.auth!.userId;
+    // Antes de listar, fecha as encomendas deste cliente cujo prazo de pagamento já passou (o stock volta).
+    await expireStaleOrders({ userId }).catch((error) => request.log.error(error, "order expiry failed"));
+    const tab = q.tab ?? (q.invoiced === "true" ? "wallet" : "all");
+    const where = { AND: [{ userId }, tabWhere(tab)] };
+    const [rows, total, counts] = await Promise.all([
       prisma.order.findMany({
         where,
         orderBy: { createdAt: "desc" },
         skip: (q.page - 1) * q.limit,
         take: q.limit,
         select: {
-          id: true, orderNumber: true, status: true, totalMzn: true, discountMzn: true, createdAt: true,
+          id: true, orderNumber: true, status: true, totalMzn: true, discountMzn: true, createdAt: true, cancellationReason: true,
+          payments: { select: { status: true } },
           invoice: { select: { id: true, invoiceNumber: true } },
           items: { select: { productName: true, quantity: true }, orderBy: { id: "asc" }, take: 2 },
           _count: { select: { items: true } }
         }
       }),
-      prisma.order.count({ where })
+      prisma.order.count({ where }),
+      Promise.all(ORDER_TABS.map((t) => prisma.order.count({ where: { AND: [{ userId }, tabWhere(t)] } })))
     ]);
+    // A fase de cada encomenda e o fim do prazo vêm do servidor: o telemóvel só desenha a contagem.
+    const data = rows.map(({ cancellationReason, payments, ...order }) => ({
+      ...order,
+      phase: classifyOrder({ status: order.status, cancellationReason, paymentStatuses: payments.map((p) => p.status) }),
+      expired: order.status === OrderStatus.CANCELLED && cancellationReason === EXPIRY_REASON,
+      paymentDeadline: order.status === OrderStatus.PENDING_PAYMENT ? paymentDeadline(order.createdAt).toISOString() : null
+    }));
     reply.header("Cache-Control", "private, no-store");
-    return { data, pagination: { page: q.page, limit: q.limit, total } };
+    return {
+      data,
+      pagination: { page: q.page, limit: q.limit, total },
+      counts: Object.fromEntries(ORDER_TABS.map((t, i) => [t, counts[i]])),
+      serverNow: new Date().toISOString()
+    };
   });
 
   app.post("/orders", { preHandler: requireAuth }, async (request, reply) => {
@@ -349,6 +369,9 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
+      // Se o prazo de pagamento já passou, a encomenda fecha-se antes de ser lida.
+      await expireStaleOrders({ orderId: parsed.data.id }).catch((error) => request.log.error(error, "order expiry failed"));
+
       const order = await prisma.order.findUnique({
         where: {
           id: parsed.data.id
@@ -380,11 +403,20 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
         });
       }
 
-      if (isAdmin(request.auth!.roles)) return order;
+      // Prazos calculados no servidor: pagar (só enquanto aguarda pagamento) e entrega máxima (só depois de confirmado).
+      const paid = order.payments.find((payment) => finalSuccess.includes(payment.status));
+      const timing = {
+        paymentDeadline: order.status === OrderStatus.PENDING_PAYMENT ? paymentDeadline(order.createdAt).toISOString() : null,
+        deliveryDeadlineAt: paid ? deliveryDeadline(paid.confirmedAt ?? order.createdAt).toISOString() : null,
+        serverNow: new Date().toISOString()
+      };
+
+      if (isAdmin(request.auth!.roles)) return { ...order, ...timing };
 
       // Mesma regra de GET /payments/:id: sem códigos/mensagens de falha nem ids internos do gateway.
       return {
         ...order,
+        ...timing,
         payments: order.payments.map((payment) => ({
           ...payment,
           transactionCode: null,

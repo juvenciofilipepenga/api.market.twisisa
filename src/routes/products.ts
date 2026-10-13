@@ -5,6 +5,7 @@ import { prisma } from "../lib/prisma.js";
 import { requireAuth, requireRole } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
 import { deleteCloudinaryAsset } from "../services/cloudinary.js";
+import { computePricing, type PricingInput } from "../services/pricing.js";
 import { availableStock, CatalogError, describeOptions, normalizeVariants, optionsFromLegacy, parseAttributeValue, type NormalizedVariant, type VariantOptions } from "../services/catalog.js";
 
 function slugify(value: string): string {
@@ -32,11 +33,25 @@ const attributeInputSchema = z.object({
   value: z.union([z.string().max(300), z.number(), z.boolean(), z.null()])
 });
 
+// Calculadora de preço: o preço do produto é CALCULADO destes valores (services/pricing.ts), nunca escrito à mão.
+const pricingInputSchema = z.object({
+  purchaseMzn: z.number().positive().max(10_000_000),
+  taxPct: z.number().min(0).max(100).default(0),
+  transportMzn: z.number().min(0).max(10_000_000).default(0),
+  otherCostsMzn: z.number().min(0).max(10_000_000).default(0),
+  returnPct: z.number().min(0).max(1000),
+  commissionPct: z.number().min(0).max(60).default(0),
+  // Tecto de 50% de desconto, validado aqui (o cliente pode pedir mais; o servidor recusa).
+  discountPct: z.number().min(0).max(50).default(0)
+});
+
 // Base SEM defaults: serve de ponto de partida tanto para criar (com defaults) como para editar (parcial).
 const productBaseSchema = z.object({
   name: z.string().trim().min(2).max(160),
   description: z.string().trim().max(4000).optional(),
-  priceMzn: z.number().positive().max(10_000_000),
+  // Com `pricing`, o preço é calculado no servidor e este valor é ignorado. Sem `pricing` (importações antigas) vale como está.
+  priceMzn: z.number().positive().max(10_000_000).optional(),
+  pricing: pricingInputSchema.optional(),
   stock: z.number().int().min(0).max(1_000_000),
   categoryId: z.string().min(1).optional(),
   active: z.boolean(),
@@ -47,7 +62,7 @@ const productBaseSchema = z.object({
 const productWriteSchema = productBaseSchema.extend({
   stock: z.number().int().min(0).max(1_000_000).default(0),
   active: z.boolean().default(true)
-});
+}).refine((p) => p.pricing !== undefined || p.priceMzn !== undefined, { message: "pricing or priceMzn required" });
 
 // Edição: campos opcionais e SEM defaults (um PATCH só com { active: false } não pode mexer no stock).
 // description/categoryId aceitam null para poderem ser limpos.
@@ -57,13 +72,25 @@ const productPatchSchema = productBaseSchema.partial().extend({
 });
 
 const CATALOG_INPUT_ERRORS = new Set(["DUPLICATE_VARIANT", "VARIANT_ATTRIBUTE_REQUIRED", "DUPLICATE_SKU", "TOO_MANY_OPTIONS", "ATTRIBUTE_REQUIRED", "ATTRIBUTE_INVALID_VALUE", "ATTRIBUTE_NOT_IN_CATEGORY"]);
-const KNOWN_PRODUCT_ERRORS = new Set([...CATALOG_INPUT_ERRORS, "INVALID_NAME"]);
+const KNOWN_PRODUCT_ERRORS = new Set([...CATALOG_INPUT_ERRORS, "INVALID_NAME", "INVALID_PRICE"]);
 
 // Variantes: SÓ as ativas nas listas públicas e no detalhe; o admin recebe todas na resposta de gravação.
 const PRODUCT_INCLUDE = { category: true, images: { orderBy: { sortOrder: "asc" as const } }, variants: { where: { active: true }, orderBy: { createdAt: "asc" as const } }, attributeValues: { include: { attribute: true } } };
-const ADMIN_WRITE_INCLUDE = { category: true, images: { orderBy: { sortOrder: "asc" as const } }, variants: { orderBy: { createdAt: "asc" as const } }, attributeValues: { include: { attribute: true } } };
+const ADMIN_WRITE_INCLUDE = { pricing: true, category: true, images: { orderBy: { sortOrder: "asc" as const } }, variants: { orderBy: { createdAt: "asc" as const } }, attributeValues: { include: { attribute: true } } };
 
 type AttributeInput = z.infer<typeof attributeInputSchema>;
+
+// Preço final do produto: calculado a partir dos custos (o que o cliente paga já com o desconto), ou o valor dado (legado, sem custos).
+// null = fora dos limites.
+function resolvePrice(input: { pricing?: PricingInput; priceMzn?: number }): number | null {
+  const price = input.pricing ? computePricing(input.pricing).customerPrice : input.priceMzn;
+  return price !== undefined && price > 0 && price <= 10_000_000 ? price : null;
+}
+
+const pricingData = (p: PricingInput) => ({
+  purchaseMzn: p.purchaseMzn, taxPct: p.taxPct, transportMzn: p.transportMzn, otherCostsMzn: p.otherCostsMzn,
+  returnPct: p.returnPct, commissionPct: p.commissionPct, discountPct: p.discountPct
+});
 
 interface PresentableProduct {
   priceMzn: Prisma.Decimal;
@@ -80,7 +107,8 @@ interface PresentableProduct {
 //  - effectivePriceMzn por variante: o da variante ou, se vazio, o do produto;
 //  - optionDefs: as opções que o cliente pode escolher, deduzidas das variantes reais.
 function present<P extends PresentableProduct>(product: P, publicOnly: boolean) {
-  const { attributeValues, ...rest } = product;
+  // Custos e margens só saem para o admin; mesmo que alguém acrescente `pricing` ao include público, é cortado aqui.
+  const { attributeValues, pricing, ...rest } = product as P & { pricing?: unknown };
   const variants = product.variants.map((variant) => {
     const raw = variant.options && typeof variant.options === "object" && !Array.isArray(variant.options) ? (variant.options as VariantOptions) : {};
     const options = Object.keys(raw).length ? raw : optionsFromLegacy(variant.colorHex, variant.size);
@@ -96,7 +124,7 @@ function present<P extends PresentableProduct>(product: P, publicOnly: boolean) 
       options: row.attribute.options, required: row.attribute.required, showPublic: row.attribute.showPublic, filterable: row.attribute.filterable,
       value: row.valueText ?? (row.valueNumber !== null ? Number(row.valueNumber) : row.valueBool)
     }));
-  return { ...rest, variants, stock: availableStock({ stock: product.stock, variants }), priceFromMzn, optionDefs: describeOptions(active), attributes };
+  return { ...rest, ...(publicOnly ? {} : { pricing: pricing ?? null }), variants, stock: availableStock({ stock: product.stock, variants }), priceFromMzn, optionDefs: describeOptions(active), attributes };
 }
 
 function variantCreateData(variant: NormalizedVariant) {
@@ -240,17 +268,20 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const slug = slugify(parsed.data.name);
     if (!slug) return reply.code(400).send({ error: "INVALID_NAME" });
+    const price = resolvePrice(parsed.data);
+    if (price === null) return reply.code(400).send({ error: "INVALID_INPUT" });
     try {
       const variants = parsed.data.variants?.length ? normalizeVariants(parsed.data.variants) : [];
       const product = await prisma.$transaction(async (tx) => {
         const created = await tx.product.create({
           data: {
-            name: parsed.data.name, slug, description: parsed.data.description, priceMzn: new Prisma.Decimal(parsed.data.priceMzn),
+            name: parsed.data.name, slug, description: parsed.data.description, priceMzn: new Prisma.Decimal(price),
             // Com variantes o stock vive nelas (a API calcula o total); o do produto só conta para produtos simples.
             stock: variants.length ? 0 : parsed.data.stock, active: parsed.data.active, categoryId: parsed.data.categoryId,
             variants: variants.length ? { create: variants.map(variantCreateData) } : undefined
           }
         });
+        if (parsed.data.pricing) await tx.productPricing.create({ data: { productId: created.id, ...pricingData(parsed.data.pricing) } });
         await saveAttributes(tx, created.id, created.categoryId, parsed.data.attributes, { categoryTouched: true, enforceRequired: true, active: created.active });
         return tx.product.findUniqueOrThrow({ where: { id: created.id }, include: ADMIN_WRITE_INCLUDE });
       });
@@ -292,7 +323,12 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
         const variants = item.variants?.length ? normalizeVariants(item.variants) : [];
         const slug = slugify(item.name);
         if (!slug) throw new Error("INVALID_NAME");
-        await prisma.product.create({ data: { name: item.name, slug, description: item.description, priceMzn: new Prisma.Decimal(item.priceMzn), stock: variants.length ? 0 : item.stock, active: item.active, categoryId: item.categoryId, variants: variants.length ? { create: variants.map(variantCreateData) } : undefined } });
+        const price = resolvePrice(item);
+        if (price === null) throw new Error("INVALID_PRICE");
+        await prisma.$transaction(async (tx) => {
+          const row = await tx.product.create({ data: { name: item.name, slug, description: item.description, priceMzn: new Prisma.Decimal(price), stock: variants.length ? 0 : item.stock, active: item.active, categoryId: item.categoryId, variants: variants.length ? { create: variants.map(variantCreateData) } : undefined } });
+          if (item.pricing) await tx.productPricing.create({ data: { productId: row.id, ...pricingData(item.pricing) } });
+        });
         created++;
       } catch (error) {
         const message = error instanceof Error && KNOWN_PRODUCT_ERRORS.has(error.message)
@@ -312,18 +348,22 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     const body = productPatchSchema.safeParse(request.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     try {
-      const { variants: variantInputs, attributes, ...base } = body.data;
+      const { variants: variantInputs, attributes, pricing, ...base } = body.data;
       const variants = variantInputs ? normalizeVariants(variantInputs) : undefined;
+      // Com custos, o preço é recalculado aqui e o `priceMzn` que vier no pedido é ignorado.
+      const price = pricing || base.priceMzn !== undefined ? resolvePrice({ pricing, priceMzn: base.priceMzn }) : undefined;
+      if (price === null) return reply.code(400).send({ error: "INVALID_INPUT" });
       const product = await prisma.$transaction(async (tx) => {
         const current = await tx.product.findUnique({ where: { id: params.data.id } });
         if (!current) throw new Error("PRODUCT_NOT_FOUND");
-        const data: Prisma.ProductUncheckedUpdateInput = { ...base, priceMzn: base.priceMzn === undefined ? undefined : new Prisma.Decimal(base.priceMzn) };
+        const data: Prisma.ProductUncheckedUpdateInput = { ...base, priceMzn: price === undefined ? undefined : new Prisma.Decimal(price) };
         if (base.name) data.slug = slugify(base.name);
         // Com variantes o stock vive nelas (o produto guarda 0 e a API calcula o total). Sem variantes, o stock é do produto.
         if (variants) data.stock = variants.length ? 0 : (base.stock ?? 0);
         // Produto que tem variantes: um `stock` solto no PATCH não pode sobrepor o das variantes.
         else if (base.stock !== undefined && (await tx.productVariant.count({ where: { productId: current.id, active: true } })) > 0) delete data.stock;
         const updated = await tx.product.update({ where: { id: params.data.id }, data });
+        if (pricing) await tx.productPricing.upsert({ where: { productId: updated.id }, create: { productId: updated.id, ...pricingData(pricing) }, update: pricingData(pricing) });
         if (variants) {
           // Sincroniza pela chave canónica das opções em vez de apagar e recriar: apagar punha OrderItem.variantId a NULL
           // (ON DELETE SET NULL) e os cancelamentos/reembolsos deixavam de repor o stock da variante.

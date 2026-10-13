@@ -34,7 +34,12 @@ const schema = z
     // Segundos que o cliente tem para confirmar o PIN no telemóvel antes de o pagamento expirar.
     PAYMENT_CONFIRM_WINDOW_SECONDS: z.coerce.number().int().min(60).max(900).default(180),
     // Pagamento manual: tempo (s) que o cliente tem para pagar a partir de "Enviar pedido". Passado isto, o pedido expira sozinho.
-    MANUAL_PAYMENT_WINDOW_SECONDS: z.coerce.number().int().min(60).max(1800).default(300),
+    MANUAL_PAYMENT_WINDOW_SECONDS: z.coerce.number().int().min(60).max(1800).default(1800),
+    // Prazo (s) para pagar uma encomenda, contado desde que o pedido é enviado. Passado isto (mais uma pequena tolerância),
+    // a encomenda expira, o stock volta e o cliente já não a consegue pagar.
+    ORDER_PAYMENT_WINDOW_SECONDS: z.coerce.number().int().min(300).max(3600).default(1800),
+    // Prazo máximo de entrega, em dias, contado desde a confirmação do pagamento (mostrado ao cliente).
+    DELIVERY_MAX_DAYS: z.coerce.number().int().min(1).max(60).default(15),
     // Simulador de pagamentos para desenvolvimento/demonstração (nunca em produção).
     ZUMBOPAY_MOCK: z.string().optional().transform((v) => v === "true"),
     // URL pública do frontend (para onde o cartão regressa após o 3DS). Por omissão, a primeira origem CORS.

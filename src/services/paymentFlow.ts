@@ -16,7 +16,8 @@ export type PaymentUiState = "pending" | "success" | "failed";
 
 // Depois de o prazo acabar, o cliente que JÁ pagou ainda pode carregar em "Já paguei" durante este tempo
 // (pagou no último minuto e o relógio venceu antes do clique: o dinheiro é dele, não o perdemos).
-export const MANUAL_CLAIM_GRACE_MS = 30 * 60_000;
+// Igual à tolerância com que a encomenda é fechada (EXPIRY_GRACE_MS em orderExpiry.ts): depois disto o pedido já não existe.
+export const MANUAL_CLAIM_GRACE_MS = 2 * 60_000;
 
 export const finalSuccess: PaymentStatus[] = [PaymentStatus.SUCCESS, PaymentStatus.PAYMENT_CONFIRMED];
 const failedStates: PaymentStatus[] = [PaymentStatus.FAILED, PaymentStatus.TIMEOUT, PaymentStatus.CANCELLED, PaymentStatus.PAYMENT_REJECTED];

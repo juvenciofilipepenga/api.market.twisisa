@@ -55,6 +55,8 @@ export const ModelName = {
   Session: 'Session',
   Category: 'Category',
   Product: 'Product',
+  ProductPricing: 'ProductPricing',
+  PricingSettings: 'PricingSettings',
   ProductVariant: 'ProductVariant',
   ProductImage: 'ProductImage',
   Order: 'Order',
@@ -70,7 +72,9 @@ export const ModelName = {
   AuditLog: 'AuditLog',
   Review: 'Review',
   InvoiceSettings: 'InvoiceSettings',
-  PaymentSettings: 'PaymentSettings'
+  PaymentSettings: 'PaymentSettings',
+  CategoryAttribute: 'CategoryAttribute',
+  ProductAttributeValue: 'ProductAttributeValue'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -160,11 +164,41 @@ export const ProductScalarFieldEnum = {
 export type ProductScalarFieldEnum = (typeof ProductScalarFieldEnum)[keyof typeof ProductScalarFieldEnum]
 
 
+export const ProductPricingScalarFieldEnum = {
+  productId: 'productId',
+  purchaseMzn: 'purchaseMzn',
+  taxPct: 'taxPct',
+  transportMzn: 'transportMzn',
+  otherCostsMzn: 'otherCostsMzn',
+  returnPct: 'returnPct',
+  commissionPct: 'commissionPct',
+  discountPct: 'discountPct',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type ProductPricingScalarFieldEnum = (typeof ProductPricingScalarFieldEnum)[keyof typeof ProductPricingScalarFieldEnum]
+
+
+export const PricingSettingsScalarFieldEnum = {
+  id: 'id',
+  goodFromPct: 'goodFromPct',
+  excellentFromPct: 'excellentFromPct',
+  updatedAt: 'updatedAt'
+} as const
+
+export type PricingSettingsScalarFieldEnum = (typeof PricingSettingsScalarFieldEnum)[keyof typeof PricingSettingsScalarFieldEnum]
+
+
 export const ProductVariantScalarFieldEnum = {
   id: 'id',
   productId: 'productId',
   colorHex: 'colorHex',
   size: 'size',
+  options: 'options',
+  optionKey: 'optionKey',
+  sku: 'sku',
+  priceMzn: 'priceMzn',
   stock: 'stock',
   active: 'active',
   createdAt: 'createdAt',
@@ -181,7 +215,8 @@ export const ProductImageScalarFieldEnum = {
   publicId: 'publicId',
   altText: 'altText',
   sortOrder: 'sortOrder',
-  isPrimary: 'isPrimary'
+  isPrimary: 'isPrimary',
+  variantId: 'variantId'
 } as const
 
 export type ProductImageScalarFieldEnum = (typeof ProductImageScalarFieldEnum)[keyof typeof ProductImageScalarFieldEnum]
@@ -216,6 +251,8 @@ export const OrderItemScalarFieldEnum = {
   variantId: 'variantId',
   variantColorHex: 'variantColorHex',
   variantSize: 'variantSize',
+  variantLabel: 'variantLabel',
+  sku: 'sku',
   productName: 'productName',
   unitPriceMzn: 'unitPriceMzn',
   quantity: 'quantity',
@@ -432,12 +469,50 @@ export const PaymentSettingsScalarFieldEnum = {
 export type PaymentSettingsScalarFieldEnum = (typeof PaymentSettingsScalarFieldEnum)[keyof typeof PaymentSettingsScalarFieldEnum]
 
 
+export const CategoryAttributeScalarFieldEnum = {
+  id: 'id',
+  categoryId: 'categoryId',
+  name: 'name',
+  key: 'key',
+  type: 'type',
+  required: 'required',
+  showPublic: 'showPublic',
+  filterable: 'filterable',
+  unit: 'unit',
+  options: 'options',
+  sortOrder: 'sortOrder',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt'
+} as const
+
+export type CategoryAttributeScalarFieldEnum = (typeof CategoryAttributeScalarFieldEnum)[keyof typeof CategoryAttributeScalarFieldEnum]
+
+
+export const ProductAttributeValueScalarFieldEnum = {
+  id: 'id',
+  productId: 'productId',
+  attributeId: 'attributeId',
+  valueText: 'valueText',
+  valueNumber: 'valueNumber',
+  valueBool: 'valueBool'
+} as const
+
+export type ProductAttributeValueScalarFieldEnum = (typeof ProductAttributeValueScalarFieldEnum)[keyof typeof ProductAttributeValueScalarFieldEnum]
+
+
 export const SortOrder = {
   asc: 'asc',
   desc: 'desc'
 } as const
 
 export type SortOrder = (typeof SortOrder)[keyof typeof SortOrder]
+
+
+export const JsonNullValueInput = {
+  JsonNull: JsonNull
+} as const
+
+export type JsonNullValueInput = (typeof JsonNullValueInput)[keyof typeof JsonNullValueInput]
 
 
 export const NullableJsonNullValueInput = {

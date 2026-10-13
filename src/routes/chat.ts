@@ -154,7 +154,15 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const history = await loadHistory(conversation.id);
-    const { reply: botReply, escalate } = await handleCustomerMessage({ userId: request.auth!.userId, text: parts.content, history });
+    emitChatEvent(conversation.userId, "chat.typing", { conversationId: conversation.id, isTyping: true, senderType: "BOT" });
+    const botResult = await (async () => {
+      try {
+        return await handleCustomerMessage({ userId: request.auth!.userId, text: parts.content!, history });
+      } finally {
+        emitChatEvent(conversation.userId, "chat.typing", { conversationId: conversation.id, isTyping: false, senderType: "BOT" });
+      }
+    })();
+    const { reply: botReply, escalate } = botResult;
     const botMessage = await prisma.chatMessage.create({ data: { conversationId: conversation.id, senderType: ChatSenderType.BOT, content: botReply } });
     // Condicional a BOT: se um admin respondeu entretanto (ESCALATED), a resposta do bot não repõe a conversa em BOT.
     await prisma.conversation.updateMany({
