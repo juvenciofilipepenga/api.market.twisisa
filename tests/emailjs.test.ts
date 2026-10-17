@@ -14,7 +14,7 @@ describe("EmailJS service", () => {
   it("posts the REST payload with the private key as accessToken", async () => {
     const fetchImpl = vi.fn(async () => new Response("OK", { status: 200 }));
     const result = await sendEmailJs("template_reset", { to_email: "a@b.co", reset_link: "https://x/redefinir?token=t" }, config, fetchImpl as unknown as typeof fetch);
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, status: 200, detail: "OK" });
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://api.emailjs.com/api/v1.0/email/send");
     expect(init.method).toBe("POST");

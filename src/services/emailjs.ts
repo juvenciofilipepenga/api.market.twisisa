@@ -4,7 +4,7 @@ const ENDPOINT = "https://api.emailjs.com/api/v1.0/email/send";
 const TIMEOUT_MS = 8_000;
 
 export type EmailJsResult =
-  | { ok: true }
+  | { ok: true; status: number; detail?: string }
   | { ok: false; reason: "NOT_CONFIGURED" | "REJECTED" | "NETWORK"; status?: number; detail?: string };
 
 type Params = Record<string, string | number>;
@@ -28,8 +28,9 @@ export async function sendEmailJs(templateId: string, params: Params, config: Em
       }),
       signal: AbortSignal.timeout(TIMEOUT_MS)
     });
-    if (response.ok) return { ok: true };
-    const detail = (await response.text().catch(() => "")).slice(0, 200);
+    const responseText = (await response.text().catch(() => "")).slice(0, 200);
+    if (response.ok) return { ok: true, status: response.status, detail: responseText };
+    const detail = responseText;
     return { ok: false, reason: "REJECTED", status: response.status, detail };
   } catch (error) {
     return { ok: false, reason: "NETWORK", detail: error instanceof Error ? error.name : "unknown" };

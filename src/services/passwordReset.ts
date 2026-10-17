@@ -52,7 +52,15 @@ export async function requestPasswordReset(email: string, ctx: Ctx): Promise<"OK
 
 async function issueResetEmail(email: string, ctx: Ctx): Promise<void> {
   const user = await prisma.user.findUnique({ where: { email }, select: { id: true, name: true, email: true, status: true } });
-  if (!user || isRestricted(user.status)) return;
+  // Diagnóstico sem expor endereços de email nem revelar a existência da conta ao cliente.
+  if (!user) {
+    ctx.log.info({ reason: "ACCOUNT_NOT_FOUND" }, "password reset email not attempted");
+    return;
+  }
+  if (isRestricted(user.status)) {
+    ctx.log.info({ reason: "ACCOUNT_RESTRICTED" }, "password reset email not attempted");
+    return;
+  }
 
   const now = new Date();
   const recent = await prisma.passwordReset.findMany({
@@ -61,8 +69,14 @@ async function issueResetEmail(email: string, ctx: Ctx): Promise<void> {
     orderBy: { createdAt: "desc" },
     take: MAX_PER_HOUR
   });
-  if (recent.length >= MAX_PER_HOUR) return;
-  if (recent[0] && now.getTime() - recent[0].createdAt.getTime() < COOLDOWN_MS) return;
+  if (recent.length >= MAX_PER_HOUR) {
+    ctx.log.info({ reason: "HOURLY_LIMIT" }, "password reset email not attempted");
+    return;
+  }
+  if (recent[0] && now.getTime() - recent[0].createdAt.getTime() < COOLDOWN_MS) {
+    ctx.log.info({ reason: "COOLDOWN" }, "password reset email not attempted");
+    return;
+  }
 
   const token = generateResetToken();
   const expiresAt = new Date(now.getTime() + env.PASSWORD_RESET_TTL_MINUTES * 60_000);
@@ -90,6 +104,9 @@ async function issueResetEmail(email: string, ctx: Ctx): Promise<void> {
     ctx.log.error({ reason: result.reason, status: result.status, detail: result.detail }, "password reset email failed");
     await prisma.passwordReset.update({ where: { id: created.id }, data: { usedAt: new Date() } }).catch(() => undefined);
     await safeAudit(ctx, { actorId: user.id, action: "PASSWORD_RESET_EMAIL_FAILED", entity: "User", entityId: user.id, metadata: { reason: result.reason, status: result.status } });
+  } else {
+    // 200 confirma que o EmailJS aceitou o pedido; não é confirmação de entrega na caixa do destinatário.
+    ctx.log.info({ status: result.status, response: result.detail }, "password reset email accepted by EmailJS");
   }
   // Limpeza oportunista de registos antigos (não há tarefa agendada em serverless).
   await prisma.passwordReset.deleteMany({ where: { expiresAt: { lt: new Date(now.getTime() - CLEANUP_AFTER_MS) } } }).catch(() => undefined);
