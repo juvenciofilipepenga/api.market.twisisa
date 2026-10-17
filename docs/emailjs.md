@@ -49,8 +49,8 @@ Se não foi você, contacte-nos de imediato pelo chat em {{site_url}}.
 
 | Pedido | Resposta |
 | --- | --- |
-| `POST /auth/forgot-password` `{ email }` | `200 { ok: true }` sempre (exista a conta ou não). `503 EMAIL_UNAVAILABLE` se as variáveis EMAILJS não estiverem definidas em produção. `429` acima de 5 pedidos/min por IP. |
-| `POST /auth/reset-password/check` `{ token }` | `200 { valid, email (mascarado), expiresAt }` ou `400 INVALID_TOKEN` / `410 TOKEN_EXPIRED` / `410 TOKEN_USED` / `403 ACCOUNT_RESTRICTED` |
+| `POST /auth/forgot-password` `{ email }` | `200 { ok, cooldownSeconds, expiresMinutes }` sempre (exista a conta ou não; os dois números são fixos e servem o timer de reenvio). `503 EMAIL_UNAVAILABLE` se as variáveis EMAILJS não estiverem definidas em produção. `429` acima de 5 pedidos/min por IP. |
+| `POST /auth/reset-password/check` `{ token }` | `200 { valid, email (mascarado), expiresAt, serverNow }` ou `400 INVALID_TOKEN` / `410 TOKEN_EXPIRED` / `410 TOKEN_USED` / `403 ACCOUNT_RESTRICTED` |
 | `POST /auth/reset-password` `{ token, password }` | `200 { ok, user, accessToken }` (`accessToken` é `null` em contas de administração: têm de entrar pelo login) ou os erros acima, mais `422 SAME_PASSWORD` |
 
 Regras: link válido por `PASSWORD_RESET_TTL_MINUTES` (30 por omissão) e de uso único; um pedido novo invalida o link anterior;

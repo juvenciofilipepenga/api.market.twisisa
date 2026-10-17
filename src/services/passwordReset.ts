@@ -8,7 +8,8 @@ import { audit } from "./audit.js";
 import { sendEmailJs } from "./emailjs.js";
 import { notifyUser } from "./notifications.js";
 
-const COOLDOWN_MS = 60_000;          // entre dois pedidos para a mesma conta
+export const RESET_COOLDOWN_SECONDS = 60;   // entre dois pedidos para a mesma conta
+const COOLDOWN_MS = RESET_COOLDOWN_SECONDS * 1000;
 const MAX_PER_HOUR = 5;              // pedidos por conta e por hora (evita encher a caixa de alguém)
 const MIN_RESPONSE_MS = 700;         // resposta com duração parecida exista a conta ou não (ver requestPasswordReset)
 const CLEANUP_AFTER_MS = 24 * 3_600_000;

@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { Prisma, RoleName } from "../generated/prisma/client.js";
 import { z } from "zod";
+import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { DUMMY_PASSWORD_HASH, hashPassword, signAccessToken, verifyPassword } from "../lib/auth.js";
 import { requireAuth } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
-import { checkResetToken, completePasswordReset, requestPasswordReset } from "../services/passwordReset.js";
+import { checkResetToken, completePasswordReset, requestPasswordReset, RESET_COOLDOWN_SECONDS } from "../services/passwordReset.js";
 import { findActiveInviterByCode, normalizeReferralCode, notifyReferralSignup } from "../services/referrals.js";
 
 const registerSchema = z.object({
@@ -78,7 +79,8 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const outcome = await requestPasswordReset(parsed.data.email, { ip: request.ip, userAgent: request.headers["user-agent"], log: request.log });
     if (outcome === "UNAVAILABLE") return reply.code(503).send({ error: "EMAIL_UNAVAILABLE" });
-    return { ok: true };
+    // Valores fixos (iguais para qualquer email): o frontend sincroniza o timer de reenvio sem saber se a conta existe.
+    return { ok: true, cooldownSeconds: RESET_COOLDOWN_SECONDS, expiresMinutes: env.PASSWORD_RESET_TTL_MINUTES };
   });
 
   // A página do link pergunta se o token ainda vale (e mostra o email mascarado) antes de pedir a nova palavra-passe.
@@ -86,7 +88,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     const parsed = tokenSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const result = await checkResetToken(parsed.data.token);
-    if (result.state === "valid") return { valid: true, email: result.emailMasked, expiresAt: result.expiresAt.toISOString() };
+    if (result.state === "valid") return { valid: true, email: result.emailMasked, expiresAt: result.expiresAt.toISOString(), serverNow: new Date().toISOString() };
     return reply.code(resetStatus(result.state)).send({ error: resetError(result.state) });
   });
 
