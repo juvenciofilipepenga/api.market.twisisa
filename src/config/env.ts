@@ -44,6 +44,15 @@ const schema = z
     ZUMBOPAY_MOCK: z.string().optional().transform((v) => v === "true"),
     // URL pública do frontend (para onde o cartão regressa após o 3DS). Por omissão, a primeira origem CORS.
     FRONTEND_URL: z.string().url().optional(),
+    // Recuperação de conta por email (EmailJS). As 4 primeiras variáveis são TODAS necessárias para enviar emails;
+    // EMAILJS_TEMPLATE_ID_CHANGED é opcional (aviso "a sua palavra-passe foi alterada").
+    EMAILJS_SERVICE_ID: z.string().min(1).optional(),
+    EMAILJS_TEMPLATE_ID: z.string().min(1).optional(),
+    EMAILJS_PUBLIC_KEY: z.string().min(1).optional(),
+    EMAILJS_PRIVATE_KEY: z.string().min(1).optional(),
+    EMAILJS_TEMPLATE_ID_CHANGED: z.string().min(1).optional(),
+    // Minutos de validade do link de recuperação.
+    PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(120).default(30),
     GROQ_API_KEY: z.string().min(1).optional(),
     GROQ_MODEL: z.string().min(1).default("llama-3.3-70b-versatile"),
     GROQ_API_BASE_URL: z.string().url().default("https://api.groq.com/openai/v1"),
@@ -53,6 +62,11 @@ const schema = z
   .superRefine((value, ctx) => {
     if (value.ZUMBOPAY_MOCK && value.NODE_ENV === "production") {
       ctx.addIssue({ code: "custom", path: ["ZUMBOPAY_MOCK"], message: "ZUMBOPAY_MOCK must not be enabled in production" });
+    }
+    // Configuração a meio (ex.: falta a chave privada) falha no arranque, em vez de só se descobrir quando um cliente pede o email.
+    const emailjsSet = [value.EMAILJS_SERVICE_ID, value.EMAILJS_TEMPLATE_ID, value.EMAILJS_PUBLIC_KEY, value.EMAILJS_PRIVATE_KEY].filter(Boolean).length;
+    if (emailjsSet > 0 && emailjsSet < 4) {
+      ctx.addIssue({ code: "custom", path: ["EMAILJS_SERVICE_ID"], message: "EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, EMAILJS_PUBLIC_KEY and EMAILJS_PRIVATE_KEY must be set together" });
     }
     if (value.ZUMBOPAY_ENABLED && !value.ZUMBOPAY_WEBHOOK_SECRET) {
       ctx.addIssue({ code: "custom", path: ["ZUMBOPAY_WEBHOOK_SECRET"], message: "Required when ZUMBOPAY_ENABLED=true" });
@@ -76,4 +90,9 @@ export const zumboPayMock = env.ZUMBOPAY_MOCK === true && env.NODE_ENV !== "prod
 // Real: chave configurada. Simulado: só fora de produção. Qualquer um dos dois permite o fluxo completo.
 export const zumboPayConfigured = zumboPayMock || Boolean(env.ZUMBOPAY_ENABLED && env.ZUMBOPAY_API_KEY);
 export const frontendUrl = env.FRONTEND_URL ?? corsOrigins[0] ?? "http://localhost:5173";
+export interface EmailJsConfig { serviceId: string; templateReset: string; templateChanged?: string; publicKey: string; privateKey: string }
+export const emailjsConfig: EmailJsConfig | null =
+  env.EMAILJS_SERVICE_ID && env.EMAILJS_TEMPLATE_ID && env.EMAILJS_PUBLIC_KEY && env.EMAILJS_PRIVATE_KEY
+    ? { serviceId: env.EMAILJS_SERVICE_ID, templateReset: env.EMAILJS_TEMPLATE_ID, templateChanged: env.EMAILJS_TEMPLATE_ID_CHANGED, publicKey: env.EMAILJS_PUBLIC_KEY, privateKey: env.EMAILJS_PRIVATE_KEY }
+    : null;
 export const groqConfigured = Boolean(env.GROQ_API_KEY);

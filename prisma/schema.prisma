@@ -85,6 +85,7 @@ model User {
   email String @unique
   phone String? @unique
   passwordHash String
+  passwordChangedAt DateTime?
   name String
   status UserStatus @default(ACTIVE)
   referralCode String @unique @default(cuid())
@@ -96,6 +97,7 @@ model User {
   orders Order[]
   auditLogs AuditLog[] @relation("AuditActor")
   sessions Session[]
+  passwordResets PasswordReset[]
   addresses Address[]
   invoices Invoice[]
   notifications Notification[]
@@ -129,6 +131,20 @@ model Session {
   createdAt DateTime @default(now())
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   @@index([userId])
+}
+
+// Link de recuperação de palavra-passe enviado por email. Só se guarda o hash do token (nunca o token).
+model PasswordReset {
+  id String @id @default(cuid())
+  userId String
+  tokenHash String @unique
+  expiresAt DateTime
+  usedAt DateTime?
+  requestIp String?
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([expiresAt])
 }
 
 model Category {

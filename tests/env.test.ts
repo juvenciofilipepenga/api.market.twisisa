@@ -36,4 +36,17 @@ describe("env", () => {
     expect(parseEnv(base).SHIPPING_FLAT_MZN).toBe(0);
     expect(parseEnv({ ...base, SHIPPING_FLAT_MZN: "150" }).SHIPPING_FLAT_MZN).toBe(150);
   });
+
+  it("requires the four EmailJS variables together", () => {
+    expect(() => parseEnv({ ...base, EMAILJS_SERVICE_ID: "service_x" })).toThrow();
+    expect(() => parseEnv({ ...base, EMAILJS_SERVICE_ID: "s", EMAILJS_TEMPLATE_ID: "t", EMAILJS_PUBLIC_KEY: "p" })).toThrow();
+    expect(parseEnv({ ...base, EMAILJS_SERVICE_ID: "s", EMAILJS_TEMPLATE_ID: "t", EMAILJS_PUBLIC_KEY: "p", EMAILJS_PRIVATE_KEY: "k" }).EMAILJS_PRIVATE_KEY).toBe("k");
+    expect(parseEnv({ ...base, EMAILJS_SERVICE_ID: "", EMAILJS_TEMPLATE_ID: "", EMAILJS_PUBLIC_KEY: "", EMAILJS_PRIVATE_KEY: "" }).EMAILJS_SERVICE_ID).toBeUndefined();
+  });
+
+  it("defaults the reset link validity to 30 minutes and bounds it", () => {
+    expect(parseEnv(base).PASSWORD_RESET_TTL_MINUTES).toBe(30);
+    expect(() => parseEnv({ ...base, PASSWORD_RESET_TTL_MINUTES: "1" })).toThrow();
+    expect(() => parseEnv({ ...base, PASSWORD_RESET_TTL_MINUTES: "500" })).toThrow();
+  });
 });

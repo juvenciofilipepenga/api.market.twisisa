@@ -21,13 +21,13 @@ export function signAccessToken(userId: string, roles: string[]): string {
   });
 }
 
-export function verifyAccessToken(token: string): { sub: string; roles: string[] } {
+export function verifyAccessToken(token: string): { sub: string; roles: string[]; iat?: number } {
   const payload = jwt.verify(token, env.JWT_SECRET) as jwt.JwtPayload & { sub?: string; roles?: unknown };
   if (!payload.sub) throw new Error("INVALID_TOKEN");
   const roles = Array.isArray(payload.roles) && payload.roles.every((r) => typeof r === "string")
     ? payload.roles
     : [];
-  return { sub: payload.sub, roles };
+  return { sub: payload.sub, roles, iat: typeof payload.iat === "number" ? payload.iat : undefined };
 }
 
 export function sha256(value: string): string {

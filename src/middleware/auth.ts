@@ -2,6 +2,7 @@ import type { FastifyReply, FastifyRequest } from "fastify";
 import { RoleName, UserStatus } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { verifyAccessToken } from "../lib/auth.js";
+import { tokenPredatesPasswordChange } from "../lib/resetToken.js";
 
 // O token só prova QUEM é o utilizador. Papéis e estado da conta vêm sempre da base de dados, em cada pedido:
 // assim, suspender/bloquear uma conta ou retirar o papel de admin tem efeito imediato, em vez de só
@@ -10,16 +11,21 @@ export async function requireAuth(req: FastifyRequest, reply: FastifyReply): Pro
   const header = req.headers.authorization;
   if (!header?.startsWith("Bearer ")) return reply.code(401).send({ error: "UNAUTHORIZED" });
   let userId: string;
+  let issuedAt: number | undefined;
   try {
-    userId = verifyAccessToken(header.slice(7).trim()).sub;
+    const payload = verifyAccessToken(header.slice(7).trim());
+    userId = payload.sub;
+    issuedAt = payload.iat;
   } catch {
     return reply.code(401).send({ error: "INVALID_TOKEN" });
   }
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { status: true, roles: { select: { role: { select: { name: true } } } } }
+    select: { status: true, passwordChangedAt: true, roles: { select: { role: { select: { name: true } } } } }
   });
   if (!user) return reply.code(401).send({ error: "INVALID_TOKEN" });
+  // Palavra-passe redefinida depois de este token ter sido emitido: quem entrou com a antiga é expulso.
+  if (tokenPredatesPasswordChange(issuedAt, user.passwordChangedAt)) return reply.code(401).send({ error: "INVALID_TOKEN" });
   if (user.status === UserStatus.BLOCKED || user.status === UserStatus.SUSPENDED) return reply.code(403).send({ error: "ACCOUNT_RESTRICTED" });
   req.auth = { userId, roles: user.roles.map((item) => item.role.name) };
 }

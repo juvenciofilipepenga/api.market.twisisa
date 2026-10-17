@@ -112,6 +112,12 @@ Expected response:
 - The sample seed password is for local development only and must be changed before any real deployment.
 
 
+## Account recovery (EmailJS)
+
+Migration `014_password_reset.js` adds `PasswordReset` and `User.passwordChangedAt`; run `npm run migrate` and `npm run generate`.
+Endpoints: `POST /auth/forgot-password`, `POST /auth/reset-password/check`, `POST /auth/reset-password`.
+Set `EMAILJS_SERVICE_ID`, `EMAILJS_TEMPLATE_ID`, `EMAILJS_PUBLIC_KEY`, `EMAILJS_PRIVATE_KEY` together (and `FRONTEND_URL`). Setup, template text and behaviour: `docs/emailjs.md`.
+
 ## Payments flow (ZumboPay)
 
 Checkout → `/pagamento/:orderId`: choose method (M-Pesa, e-Mola, Visa/Mastercard) → phone number → Pay → waiting screen → celebration **only after the server confirms the payment with ZumboPay**.
