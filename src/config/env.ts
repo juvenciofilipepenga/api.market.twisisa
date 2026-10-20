@@ -54,7 +54,7 @@ const schema = z
     // Minutos de validade do link de recuperação.
     PASSWORD_RESET_TTL_MINUTES: z.coerce.number().int().min(5).max(120).default(30),
     GROQ_API_KEY: z.string().min(1).optional(),
-    GROQ_MODEL: z.string().min(1).default("llama-3.3-70b-versatile"),
+    GROQ_MODEL: z.string().min(1).default("openai/gpt-oss-120b"),
     GROQ_API_BASE_URL: z.string().url().default("https://api.groq.com/openai/v1"),
     // URL pública onde este backend fica acessível; usado para construir o webhook/return URL enviados ao ZumboPay.
     APP_PUBLIC_URL: z.string().url().optional()

@@ -83,31 +83,56 @@ export interface AiResult {
   reply: string | null;
   escalate: boolean;
   usedKnowledge: string[];
+  /** Motivo técnico quando o Groq falhou (para o admin ver no teste); nunca vai para o cliente. */
+  failure?: string;
 }
 
-async function callGroq(systemPrompt: string, history: ChatHistory): Promise<{ reply: string; escalate: boolean } | null> {
+type GroqOutcome = { ok: true; reply: string; escalate: boolean } | { ok: false; failure: string };
+
+// O URL base já traz /openai/v1: new URL("/chat/completions", base) deitava esse prefixo fora e dava sempre 404.
+function groqEndpoint(): string {
+  return `${env.GROQ_API_BASE_URL.replace(/\/+$/, "")}/chat/completions`;
+}
+
+async function callGroq(systemPrompt: string, history: ChatHistory): Promise<GroqOutcome> {
+  const model = env.GROQ_MODEL;
+  // Os modelos gpt-oss "pensam" antes de responder e esses tokens contam para o limite: com pouco esforço de raciocínio e
+  // sem devolver o raciocínio, a resposta cabe no limite em vez de vir vazia. Outros modelos não aceitam estes campos.
+  const reasoning = model.startsWith("openai/gpt-oss") ? { reasoning_effort: "low", include_reasoning: false } : {};
   let response: Response;
   try {
-    response = await fetch(new URL("/chat/completions", env.GROQ_API_BASE_URL).toString(), {
+    response = await fetch(groqEndpoint(), {
       method: "POST",
       signal: AbortSignal.timeout(10_000),
       headers: { Authorization: `Bearer ${env.GROQ_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: env.GROQ_MODEL,
+        model,
         temperature: 0.3,
-        max_tokens: 300,
+        max_completion_tokens: 800,
+        ...reasoning,
         messages: [{ role: "system", content: systemPrompt }, ...history]
       })
     });
   } catch {
     // Timeout ou falha de rede: não deixa o cliente pendurado, passa a um atendente.
-    return null;
+    console.error("[chat-ai] Groq sem resposta (rede ou tempo esgotado)");
+    return { ok: false, failure: "O Groq não respondeu a tempo." };
   }
-  if (!response.ok) return null;
+  if (!response.ok) {
+    const detail = (await response.text().catch(() => "")).slice(0, 300);
+    console.error(`[chat-ai] Groq respondeu ${response.status} com o modelo ${model}: ${detail}`);
+    if (response.status === 401) return { ok: false, failure: "O Groq recusou a chave (401). Confirme GROQ_API_KEY." };
+    if (response.status === 404 || /model_decommissioned|does not exist/i.test(detail)) return { ok: false, failure: `O Groq já não tem o modelo ${model}. Mude GROQ_MODEL para um modelo atual.` };
+    if (response.status === 429) return { ok: false, failure: "O Groq atingiu o limite de pedidos (429). Tente daqui a pouco." };
+    return { ok: false, failure: `O Groq devolveu o erro ${response.status}.` };
+  }
   const body = (await response.json().catch(() => null)) as { choices?: Array<{ message?: { content?: string } }> } | null;
   const text = body?.choices?.[0]?.message?.content?.trim();
-  if (!text) return null;
-  return interpretModelReply(text);
+  if (!text) {
+    console.error(`[chat-ai] Groq devolveu resposta vazia com o modelo ${model}`);
+    return { ok: false, failure: "O Groq devolveu uma resposta vazia." };
+  }
+  return { ok: true, ...interpretModelReply(text) };
 }
 
 async function loadKnowledge(query: string): Promise<KnowledgeEntry[]> {
@@ -138,6 +163,6 @@ export async function generateAiReply(input: { userId: string | null; text: stri
   const systemPrompt = buildSystemPrompt({ assistantName: settings.assistantName, instructions: settings.instructions, knowledge, customerContext });
   const result = await callGroq(systemPrompt, input.history);
   const usedKnowledge = knowledge.map((entry) => entry.title);
-  if (!result) return { reply: BUSY_REPLY, escalate: true, usedKnowledge };
-  return { ...result, usedKnowledge };
+  if (!result.ok) return { reply: BUSY_REPLY, escalate: true, usedKnowledge, failure: result.failure };
+  return { reply: result.reply, escalate: result.escalate, usedKnowledge };
 }

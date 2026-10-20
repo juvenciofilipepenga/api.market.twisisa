@@ -78,6 +78,6 @@ export async function chatAiRoutes(app: FastifyInstance): Promise<void> {
     const settings = await loadAiSettings();
     // Mesmo com a IA desligada para clientes, o teste corre (é para o admin afinar antes de ligar).
     const result = await generateAiReply({ userId: null, text: body.data.message, history: [{ role: "user", content: body.data.message }], settings: { ...settings, enabled: true } });
-    return { reply: result.reply, escalate: result.escalate, usedKnowledge: result.usedKnowledge, groqConfigured };
+    return { reply: result.reply, escalate: result.escalate, usedKnowledge: result.usedKnowledge, failure: result.failure ?? null, groqConfigured };
   });
 }
