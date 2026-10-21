@@ -1,12 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { RoleName } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
 import { getPricingThresholds } from "../services/pricingSettings.js";
 
-const adminOnly = [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)];
+const adminOnly = [requireAuth, requirePermission("finance.settings")];
 
 const schema = z.object({
   goodFromPct: z.number().min(0).max(1000),

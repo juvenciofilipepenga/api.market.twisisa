@@ -1,8 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { RoleName } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
 import { getPaymentSettings, onlineStatus } from "../services/paymentSettings.js";
 
@@ -25,7 +24,7 @@ const schema = z.object({
 });
 
 export async function paymentSettingsRoutes(app: FastifyInstance): Promise<void> {
-  const admin = { preHandler: [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)] };
+  const admin = { preHandler: [requireAuth, requirePermission("finance.settings")] };
   const view = (s: Awaited<ReturnType<typeof getPaymentSettings>>) => ({ ...s, onlineStatus: onlineStatus(s) });
 
   app.get("/admin/payment-settings", admin, async () => view(await getPaymentSettings()));

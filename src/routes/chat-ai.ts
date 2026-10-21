@@ -1,13 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { RoleName } from "../generated/prisma/client.js";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { groqConfigured } from "../config/env.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
 import { DEFAULT_ASSISTANT_NAME, generateAiReply, loadAiSettings } from "../services/chatBot.js";
 
-const adminGuard = [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)];
+const adminGuard = [requireAuth, requirePermission("support.manage")];
 const MAX_KNOWLEDGE_ENTRIES = 300;
 
 const settingsSchema = z.object({

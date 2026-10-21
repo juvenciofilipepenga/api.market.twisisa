@@ -1,12 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { Prisma, RoleName } from "../generated/prisma/client.js";
+import { Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
 import { slugify } from "../services/catalog.js";
 
-const adminOnly = [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)];
+const adminOnly = [requireAuth, requirePermission("catalog.categories")];
+// O formulário de produto precisa de ler as características da categoria.
+const adminRead = [requireAuth, requirePermission("catalog.categories", "catalog.products")];
 
 const typeSchema = z.enum(["TEXT", "NUMBER", "BOOLEAN", "SELECT", "MEASURE"]);
 const optionsSchema = z.array(z.string().trim().min(1).max(60)).max(60);
@@ -42,7 +44,7 @@ const uniqueOptions = (options: string[]) => [...new Set(options.map((option) =>
 
 // Características técnicas por categoria (Marca, RAM, Material…). O admin define-as; nada está fixo no código.
 export async function categoryAttributeRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/admin/categories/:id/attributes", { preHandler: adminOnly }, async (request, reply) => {
+  app.get("/admin/categories/:id/attributes", { preHandler: adminRead }, async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const category = await prisma.category.findUnique({ where: { id: params.data.id }, select: { id: true } });

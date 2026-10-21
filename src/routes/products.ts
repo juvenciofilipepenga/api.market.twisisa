@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import { Prisma, RoleName } from "../generated/prisma/client.js";
+import { Prisma } from "../generated/prisma/client.js";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
 import { deleteCloudinaryAsset } from "../services/cloudinary.js";
 import { computePricing, type PricingInput } from "../services/pricing.js";
@@ -15,7 +15,8 @@ function slugify(value: string): string {
     .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
-const adminOnly = [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)];
+const adminCategories = [requireAuth, requirePermission("catalog.categories")];
+const adminProducts = [requireAuth, requirePermission("catalog.products")];
 
 // Aceita o formato novo (options: {"Cor":"#000","Tamanho":"M"}) e o antigo (colorHex/size), para não partir o que já existe.
 const variantSchema = z.object({
@@ -217,7 +218,7 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // --- Admin ---
-  app.patch("/admin/categories/:id", { preHandler: adminOnly }, async (request, reply) => {
+  app.patch("/admin/categories/:id", { preHandler: adminCategories }, async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
     const body = z.object({ name: z.string().trim().min(2).max(120) }).safeParse(request.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_INPUT" });
@@ -234,7 +235,7 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.delete("/admin/categories/:id", { preHandler: adminOnly }, async (request, reply) => {
+  app.delete("/admin/categories/:id", { preHandler: adminCategories }, async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     try {
@@ -250,7 +251,7 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post("/admin/categories", { preHandler: adminOnly }, async (request, reply) => {
+  app.post("/admin/categories", { preHandler: adminCategories }, async (request, reply) => {
     const parsed = z.object({ name: z.string().trim().min(2).max(120) }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const slug = slugify(parsed.data.name);
@@ -264,7 +265,7 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.get("/admin/products", { preHandler: adminOnly }, async (request) => {
+  app.get("/admin/products", { preHandler: adminProducts }, async (request) => {
     const q = z.object({ page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20), includeInactive: z.enum(["true", "false"]).default("true").transform((value) => value === "true"), search: z.string().trim().max(100).optional() }).parse(request.query);
     // z.coerce.boolean() tratava "false" como true (Boolean("false")), por isso o filtro nunca funcionava.
     const where = {
@@ -278,7 +279,7 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     return { data: data.map((product) => present(product, false)), pagination: { page: q.page, limit: q.limit, total } };
   });
 
-  app.post("/admin/products", { preHandler: adminOnly }, async (request, reply) => {
+  app.post("/admin/products", { preHandler: adminProducts }, async (request, reply) => {
     const parsed = productWriteSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const slug = slugify(parsed.data.name);
@@ -308,7 +309,7 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.delete("/admin/products/:id", { preHandler: adminOnly }, async (request, reply) => {
+  app.delete("/admin/products/:id", { preHandler: adminProducts }, async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     try {
@@ -327,7 +328,7 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post("/admin/products/bulk", { preHandler: adminOnly }, async (request, reply) => {
+  app.post("/admin/products/bulk", { preHandler: adminProducts }, async (request, reply) => {
     const parsed = z.object({ products: z.array(z.unknown()).min(1).max(500) }).safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const categories = await prisma.category.findMany({ select: { id: true, name: true, slug: true } });
@@ -387,7 +388,7 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ created, failed, createdAttributes: [...createdAttributes] });
   });
 
-  app.patch("/admin/products/:id", { preHandler: adminOnly }, async (request, reply) => {
+  app.patch("/admin/products/:id", { preHandler: adminProducts }, async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
     const body = productPatchSchema.safeParse(request.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_INPUT" });
@@ -442,7 +443,7 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Ajuste explícito de stock (delta positivo ou negativo), separado do PATCH geral para deixar rasto de auditoria próprio.
-  app.post("/admin/products/:id/stock", { preHandler: adminOnly }, async (request, reply) => {
+  app.post("/admin/products/:id/stock", { preHandler: adminProducts }, async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
     const body = z.object({ delta: z.number().int().refine((v) => v !== 0, "delta must not be zero") }).safeParse(request.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_INPUT" });
@@ -469,7 +470,7 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Liga uma imagem já carregada via POST /media/image a um produto.
-  app.post("/admin/products/:id/images", { preHandler: adminOnly }, async (request, reply) => {
+  app.post("/admin/products/:id/images", { preHandler: adminProducts }, async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
     const body = z.object({ url: z.string().url().max(2000).refine((value) => value.toLowerCase().startsWith("https://"), "https only"), publicId: z.string().max(200).optional(), altText: z.string().max(200).optional(), isPrimary: z.boolean().default(false) }).safeParse(request.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_INPUT" });
@@ -483,7 +484,7 @@ export async function productRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send(image);
   });
 
-  app.delete("/admin/products/:id/images/:imageId", { preHandler: adminOnly }, async (request, reply) => {
+  app.delete("/admin/products/:id/images/:imageId", { preHandler: adminProducts }, async (request, reply) => {
     const params = z.object({ id: z.string().min(1), imageId: z.string().min(1) }).safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const image = await prisma.productImage.findFirst({ where: { id: params.data.imageId, productId: params.data.id } });

@@ -3,7 +3,7 @@ import { Prisma, RoleName, UserStatus } from "../generated/prisma/client.js";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { audit } from "../services/audit.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 
 export async function userRoutes(app: FastifyInstance): Promise<void> {
   app.get("/users/me", { preHandler: requireAuth }, async (request, reply) => {
@@ -26,7 +26,7 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
     return { id: user.id, name: user.name, email: user.email, phone: user.phone };
   });
 
-  app.get("/admin/users", { preHandler: [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)] }, async (request) => {
+  app.get("/admin/users", { preHandler: [requireAuth, requirePermission("users.view")] }, async (request) => {
     const q = z.object({ search: z.string().trim().max(100).optional(), status: z.nativeEnum(UserStatus).optional(), page: z.coerce.number().int().min(1).default(1), limit: z.coerce.number().int().min(1).max(100).default(20) }).parse(request.query);
     const where = {
       ...(q.status ? { status: q.status } : {}),
@@ -44,7 +44,7 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Suspender / bloquear / reativar uma conta. Um admin não altera o próprio estado, e só um SUPER_ADMIN altera contas de admin.
-  app.patch("/admin/users/:id/status", { preHandler: [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)] }, async (request, reply) => {
+  app.patch("/admin/users/:id/status", { preHandler: [requireAuth, requirePermission("users.manage")] }, async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
     const body = z.object({ status: z.enum([UserStatus.ACTIVE, UserStatus.SUSPENDED, UserStatus.BLOCKED]) }).safeParse(request.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_INPUT" });

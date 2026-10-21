@@ -9,7 +9,7 @@ import { deliveryDeadline, EXPIRY_REASON, expireStaleOrders, paymentDeadline } f
 import { classifyOrder, ORDER_TABS, tabWhere } from "../services/orderTabs.js";
 import { finalSuccess } from "../services/paymentFlow.js";
 import { randomReference } from "../lib/auth.js";
-import { requireAuth, isAdmin } from "../middleware/auth.js";
+import { requireAuth, can } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
 import { notifyAdmins, notifyUser } from "../services/notifications.js";
 
@@ -396,7 +396,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
 
       if (
         order.userId !== request.auth!.userId &&
-        !isAdmin(request.auth!.roles)
+        !can(request.auth, "orders.view")
       ) {
         return reply.code(403).send({
           error: "FORBIDDEN"
@@ -411,7 +411,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
         serverNow: new Date().toISOString()
       };
 
-      if (isAdmin(request.auth!.roles)) return { ...order, ...timing };
+      if (can(request.auth, "orders.view")) return { ...order, ...timing };
 
       // Mesma regra de GET /payments/:id: sem códigos/mensagens de falha nem ids internos do gateway.
       return {
@@ -467,7 +467,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
 
           if (
             order.userId !== request.auth!.userId &&
-            !isAdmin(request.auth!.roles)
+            !can(request.auth, "orders.manage")
           ) {
             throw new Error("FORBIDDEN");
           }
@@ -607,7 +607,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
 
   // Atualização de acompanhamento SEM mudar o estado ("chegou ao armazém de Nampula", nova data prevista...).
   app.post("/admin/orders/:id/tracking", { preHandler: requireAuth }, async (request, reply) => {
-    if (!isAdmin(request.auth!.roles)) return reply.code(403).send({ error: "FORBIDDEN" });
+    if (!can(request.auth, "orders.manage")) return reply.code(403).send({ error: "FORBIDDEN" });
     const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
     const body = z.object({ note: z.string().trim().max(500).optional(), ...trackingFields }).safeParse(request.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_INPUT" });
@@ -642,7 +642,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
     "/admin/orders/:id/status",
     { preHandler: requireAuth },
     async (request, reply) => {
-      if (!isAdmin(request.auth!.roles)) {
+      if (!can(request.auth, "orders.manage")) {
         return reply.code(403).send({
           error: "FORBIDDEN"
         });
@@ -831,7 +831,7 @@ export async function orderRoutes(app: FastifyInstance): Promise<void> {
     "/admin/orders",
     { preHandler: requireAuth },
     async (request, reply) => {
-      if (!isAdmin(request.auth!.roles)) {
+      if (!can(request.auth, "orders.view")) {
         return reply.code(403).send({
           error: "FORBIDDEN"
         });

@@ -189,7 +189,7 @@ async function applySuccess(paymentId: string, remote: ZpPayment, log: Logger): 
       if (outcome.orderPaid) {
         await ensureInvoice(before.orderId);
         await notifyUser({ userId: before.order.userId, type: "PAYMENT", title: "Pagamento confirmado", message: "O seu pagamento foi confirmado. Já estamos a preparar a encomenda.", data: { paymentId, orderId: before.orderId } });
-        await notifyAdmins({ type: "PAYMENT", title: "Venda paga", message: `A encomenda ${before.order.orderNumber} foi paga.`, data: { paymentId, orderId: before.orderId } });
+        await notifyAdmins({ type: "PAYMENT", title: "Venda paga", audience: ["payments.manage", "orders.manage"], message: `A encomenda ${before.order.orderNumber} foi paga.`, data: { paymentId, orderId: before.orderId } });
         await notifyReferralCompletedIfFirst(before.order.userId, before.orderId).catch((e) => log.error(e, "referral notification failed"));
       } else {
         await notifyAdmins({ type: "PAYMENT", title: "Pagamento recebido para encomenda não pagável", message: `Pagamento ${before.reference} confirmado, mas a encomenda ${before.order.orderNumber} está em ${before.order.status}. Verificar reembolso.`, data: { paymentId, orderId: before.orderId } });

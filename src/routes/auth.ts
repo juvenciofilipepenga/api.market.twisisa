@@ -5,6 +5,7 @@ import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { DUMMY_PASSWORD_HASH, hashPassword, signAccessToken, verifyPassword } from "../lib/auth.js";
 import { requireAuth } from "../middleware/auth.js";
+import { permissionsFor } from "../lib/permissions.js";
 import { audit } from "../services/audit.js";
 import { checkResetToken, completePasswordReset, requestPasswordReset, RESET_COOLDOWN_SECONDS } from "../services/passwordReset.js";
 import { findActiveInviterByCode, normalizeReferralCode, notifyReferralSignup } from "../services/referrals.js";
@@ -68,7 +69,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
     if (user.status === "BLOCKED" || user.status === "SUSPENDED") return reply.code(403).send({ error: "ACCOUNT_RESTRICTED" });
     const roles = user.roles.map((item) => item.role.name);
     await audit({ actorId: user.id, action: "USER_LOGIN", entity: "User", entityId: user.id, ip: request.ip, userAgent: request.headers["user-agent"] });
-    return { user: { id: user.id, name: user.name, email: user.email, roles }, accessToken: signAccessToken(user.id, roles) };
+    return { user: { id: user.id, name: user.name, email: user.email, roles, permissions: permissionsFor(roles, user.adminProfiles) }, accessToken: signAccessToken(user.id, roles) };
   });
 
 
@@ -101,9 +102,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get("/auth/me", { preHandler: requireAuth }, async (request, reply) => {
-    const user = await prisma.user.findUnique({ where: { id: request.auth!.userId }, select: { id: true, name: true, email: true, phone: true, status: true, roles: { select: { role: { select: { name: true } } } } } });
+    const user = await prisma.user.findUnique({ where: { id: request.auth!.userId }, select: { id: true, name: true, email: true, phone: true, status: true, adminProfiles: true, roles: { select: { role: { select: { name: true } } } } } });
     if (!user) return reply.code(404).send({ error: "USER_NOT_FOUND" });
-    return { ...user, roles: user.roles.map((item) => item.role.name) };
+    const roles = user.roles.map((item) => item.role.name);
+    return { ...user, roles, permissions: permissionsFor(roles, user.adminProfiles) };
   });
 }
 

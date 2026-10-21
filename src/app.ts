@@ -17,6 +17,7 @@ import { mediaRoutes } from "./routes/media.js";
 import { referralRoutes } from "./routes/referrals.js";
 import { chatRoutes } from "./routes/chat.js";
 import { chatAiRoutes } from "./routes/chat-ai.js";
+import { teamRoutes } from "./routes/team.js";
 import { reviewRoutes } from "./routes/reviews.js";
 import { adminStatsRoutes } from "./routes/admin-stats.js";
 import { invoiceSettingsRoutes } from "./routes/invoice-settings.js";
@@ -46,6 +47,7 @@ export function buildApp() {
     await referralRoutes(api);
     await chatRoutes(api);
     await chatAiRoutes(api);
+    await teamRoutes(api);
     await reviewRoutes(api);
     await adminStatsRoutes(api);
     await invoiceSettingsRoutes(api);

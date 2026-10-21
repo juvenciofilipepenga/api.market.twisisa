@@ -2,9 +2,9 @@ import type { FastifyInstance } from "fastify";
 import { OrderStatus, RoleName, ConversationStatus } from "../generated/prisma/client.js";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 
-const adminOnly = [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)];
+const adminOnly = [requireAuth, requirePermission("dashboard.view")];
 
 // Uma venda conta como receita quando já foi paga e não foi cancelada nem reembolsada.
 const REVENUE_STATUSES: OrderStatus[] = [

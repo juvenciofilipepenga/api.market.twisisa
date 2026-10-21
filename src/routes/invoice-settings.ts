@@ -1,9 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { RoleName } from "../generated/prisma/client.js";
 import { cloudinaryConfigured, env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
 import { invoicePreviewPdf } from "../services/invoice.js";
 import { getInvoiceSettings } from "../services/invoiceSettings.js";
@@ -42,7 +41,7 @@ const settingsSchema = z.object({
 });
 
 export async function invoiceSettingsRoutes(app: FastifyInstance): Promise<void> {
-  const admin = { preHandler: [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)] };
+  const admin = { preHandler: [requireAuth, requirePermission("finance.settings")] };
 
   app.get("/admin/invoice-settings", admin, async () => getInvoiceSettings());
 

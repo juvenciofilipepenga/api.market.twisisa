@@ -1,10 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { ConversationStatus, OrderStatus, PaymentStatus, Prisma, RoleName } from "../generated/prisma/client.js";
+import { ConversationStatus, OrderStatus, PaymentStatus, Prisma } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { requireAuth, requirePermission } from "../middleware/auth.js";
 
-const adminOnly = [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)];
+const adminOnly = [requireAuth, requirePermission("dashboard.view")];
 const LOW_STOCK = 5;
 const LIST = 8;
 const HISTORY_STATES = ["PAID", "SHIPPED", "DELIVERED", "CANCELLED", "REFUNDED"];

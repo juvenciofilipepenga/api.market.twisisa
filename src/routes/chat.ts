@@ -1,9 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { ChatSenderType, ConversationStatus, RoleName, type Prisma } from "../generated/prisma/client.js";
+import { AdminProfile, ChatSenderType, ConversationStatus, RoleName, type Prisma } from "../generated/prisma/client.js";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { detectMime, isFileTooLarge } from "../lib/files.js";
-import { requireAuth, requireRole } from "../middleware/auth.js";
+import { can, requireAuth, requirePermission } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
 import { uploadChatAttachment } from "../services/cloudinary.js";
 import { generateAiReply, greetingMessage, loadAiSettings } from "../services/chatBot.js";
@@ -21,8 +21,7 @@ const ONLINE_TTL_MS = 60_000;
 // A sincronização repete uma janela curta para não perder mensagens por diferenças de relógio entre instâncias.
 const SYNC_OVERLAP_MS = 2_000;
 const SYNC_MAX_MESSAGES = 200;
-const ADMIN_ROLES: RoleName[] = [RoleName.ADMIN, RoleName.SUPER_ADMIN];
-const adminGuard = [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)];
+const adminGuard = [requireAuth, requirePermission("support.manage")];
 const ATTACHMENT_ONLY_REPLY = "Recebi o seu anexo. Vou encaminhar para um atendente que o possa ver.";
 
 type Viewer = "CUSTOMER" | "ADMIN";
@@ -184,7 +183,7 @@ async function buildSync(
     if (settings.enabled) peerOnline = true;
     else {
       const adminsOnline = await prisma.user.count({
-        where: { lastSeenAt: { gt: new Date(Date.now() - ONLINE_TTL_MS) }, roles: { some: { role: { name: { in: ADMIN_ROLES } } } } }
+        where: { lastSeenAt: { gt: new Date(Date.now() - ONLINE_TTL_MS) }, OR: [{ roles: { some: { role: { name: RoleName.SUPER_ADMIN } } } }, { roles: { some: { role: { name: RoleName.ADMIN } } }, adminProfiles: { has: AdminProfile.SUPPORT } }] }
       });
       peerOnline = adminsOnline > 0;
     }
@@ -252,8 +251,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.get("/chat/conversations/:id/messages", { preHandler: requireAuth }, async (request, reply) => {
     const conversation = await anyConversation(request, reply);
     if (!conversation) return reply;
-    const roles = request.auth!.roles;
-    const admin = roles.some((role) => ADMIN_ROLES.includes(role));
+    const admin = can(request.auth, "support.manage");
     if (conversation.userId !== request.auth!.userId && !admin) return reply.code(403).send({ error: "FORBIDDEN" });
     const messages = await prisma.chatMessage.findMany({ where: { conversationId: conversation.id }, orderBy: { createdAt: "asc" }, include: { attachments: true } });
     return { conversation, messages };

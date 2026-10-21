@@ -57,6 +57,14 @@ enum PaymentStatus {
   REFUNDED_LEGACY
 }
 
+enum AdminProfile {
+  ORDERS
+  FINANCE
+  CATALOG
+  SUPPORT
+  CONTENT
+}
+
 enum NotificationType {
   ORDER
   PAYMENT
@@ -87,6 +95,7 @@ model User {
   passwordHash String
   passwordChangedAt DateTime?
   lastSeenAt DateTime?
+  adminProfiles AdminProfile[] @default([])
   name String
   status UserStatus @default(ACTIVE)
   referralCode String @unique @default(cuid())

@@ -1,11 +1,11 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance } from "fastify";
-import { OrderStatus, PaymentStatus, Prisma, RoleName } from "../generated/prisma/client.js";
+import { OrderStatus, PaymentStatus, Prisma } from "../generated/prisma/client.js";
 import { z } from "zod";
 import { env, frontendUrl, zumboPayConfigured, zumboPayMock } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
 import { randomReference } from "../lib/auth.js";
-import { isAdmin, requireAuth, requireRole } from "../middleware/auth.js";
+import { can, requireAuth, requirePermission } from "../middleware/auth.js";
 import { audit } from "../services/audit.js";
 import { ensureInvoice } from "../services/invoice.js";
 import { notifyAdmins, notifyUser } from "../services/notifications.js";
@@ -226,7 +226,7 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Lista do admin: SÓ os pedidos em que o cliente disse "Já paguei" (os que expiraram nunca aparecem aqui).
-  app.get("/admin/payments/pending-review", { preHandler: [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)] }, async () => {
+  app.get("/admin/payments/pending-review", { preHandler: [requireAuth, requirePermission("payments.view")] }, async () => {
     const rows = await prisma.payment.findMany({
       where: { provider: "MANUAL", status: { in: [PaymentStatus.PROOF_SUBMITTED, PaymentStatus.UNDER_REVIEW] } },
       orderBy: { paidClaimedAt: "asc" },
@@ -244,7 +244,7 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
     if (!params.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const payment = await prisma.payment.findUnique({ where: { id: params.data.id }, include: { order: { select: { userId: true } } } });
     if (!payment) return reply.code(404).send({ error: "PAYMENT_NOT_FOUND" });
-    if (!isAdmin(request.auth!.roles) && payment.order.userId !== request.auth!.userId) return reply.code(403).send({ error: "FORBIDDEN" });
+    if (!can(request.auth, "payments.view") && payment.order.userId !== request.auth!.userId) return reply.code(403).send({ error: "FORBIDDEN" });
     const view = await settlePayment(payment.id, request.log);
     return view ?? reply.code(404).send({ error: "PAYMENT_NOT_FOUND" });
   });
@@ -306,8 +306,8 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return reply.code(400).send({ error: "INVALID_INPUT" });
     const payment = await prisma.payment.findUnique({ where: { id: parsed.data.id }, include: { order: true } });
     if (!payment) return reply.code(404).send({ error: "PAYMENT_NOT_FOUND" });
-    if (!isAdmin(request.auth!.roles) && payment.order.userId !== request.auth!.userId) return reply.code(403).send({ error: "FORBIDDEN" });
-    return { ...payment, failureCode: isAdmin(request.auth!.roles) ? payment.failureCode : undefined, failureMessage: isAdmin(request.auth!.roles) ? payment.failureMessage : undefined };
+    if (!can(request.auth, "payments.view") && payment.order.userId !== request.auth!.userId) return reply.code(403).send({ error: "FORBIDDEN" });
+    return { ...payment, failureCode: can(request.auth, "payments.view") ? payment.failureCode : undefined, failureMessage: can(request.auth, "payments.view") ? payment.failureMessage : undefined };
   });
 
   app.post("/payments/:id/webhook", async (request, reply) => {
@@ -369,7 +369,7 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
         if (outcome.orderPaid) {
           await ensureInvoice(current.orderId);
           await notifyUser({ userId: current.order.userId, type: "PAYMENT", title: "Pagamento confirmado", message: "O seu pagamento foi confirmado com sucesso.", data: { paymentId: current.id, orderId: current.orderId } });
-          await notifyAdmins({ type: "PAYMENT", title: "Venda paga", message: `A encomenda ${current.order.orderNumber} foi paga.`, data: { paymentId: current.id, orderId: current.orderId } });
+          await notifyAdmins({ type: "PAYMENT", title: "Venda paga", audience: ["payments.manage", "orders.manage"], message: `A encomenda ${current.order.orderNumber} foi paga.`, data: { paymentId: current.id, orderId: current.orderId } });
           await notifyReferralCompletedIfFirst(current.order.userId, current.orderId).catch((error) => request.log.error(error, "referral completion notification failed"));
         } else {
           await notifyAdmins({ type: "PAYMENT", title: "Pagamento recebido para encomenda não pagável", message: `Pagamento ${current.reference} confirmado, mas a encomenda ${current.order.orderNumber} está em ${current.order.status}. Verificar reembolso.`, data: { paymentId: current.id, orderId: current.orderId } });
@@ -433,7 +433,7 @@ export async function paymentRoutes(app: FastifyInstance): Promise<void> {
     return updated;
   });
 
-  app.post("/admin/payments/:id/review", { preHandler: [requireAuth, requireRole(RoleName.ADMIN, RoleName.SUPER_ADMIN)] }, async (request, reply) => {
+  app.post("/admin/payments/:id/review", { preHandler: [requireAuth, requirePermission("payments.manage")] }, async (request, reply) => {
     const params = z.object({ id: z.string().min(1) }).safeParse(request.params);
     const body = z.object({ approved: z.boolean(), note: z.string().max(500).optional() }).safeParse(request.body);
     if (!params.success || !body.success) return reply.code(400).send({ error: "INVALID_INPUT" });
